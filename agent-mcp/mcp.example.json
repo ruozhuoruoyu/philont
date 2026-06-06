@@ -1,0 +1,16 @@
+{
+  "_comment": "复制到 ~/.philont/mcp.json(或用 PHILONT_MCP_CONFIG 指向本文件)。每个条目挂载一个外部 MCP 服务器,其工具会自动成为 agent 可调工具。browser 用微软官方 Playwright(纯本地 stdio,免费)。capability=execute 让浏览器操作走 onAuthRequest 授权而非自动放行。也可不写本文件,直接设 PHILONT_MCP_BROWSER=1 一键启用 browser。",
+  "servers": [
+    {
+      "name": "browser",
+      "transport": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@playwright/mcp@latest", "--headless", "--isolated"]
+      },
+      "domain": "network",
+      "capability": "execute",
+      "timeout": 60000
+    }
+  ]
+}

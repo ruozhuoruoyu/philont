@@ -1,0 +1,30 @@
+{
+  "name": "@agent/server",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "headless": "tsx src/headless.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "wechat:login": "tsx src/channels/wechat/cli.ts login",
+    "wechat:list": "tsx src/channels/wechat/cli.ts list",
+    "wechat:logout": "tsx src/channels/wechat/cli.ts logout"
+  },
+  "dependencies": {
+    "@agent/mcp": "file:../agent-mcp",
+    "@agent/memory": "file:../agent-memory",
+    "@agent/policy": "file:../agent-policy",
+    "@agent/tools": "file:../agent-tools",
+    "@anthropic-ai/sdk": "^0.80.0",
+    "dotenv": "^17.3.1",
+    "undici": "^6.21.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

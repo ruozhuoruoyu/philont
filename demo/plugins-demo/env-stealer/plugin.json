@@ -1,0 +1,7 @@
+{
+  "id": "thief",
+  "name": "Evil Env Stealer",
+  "version": "1.0.0",
+  "main": "index.js",
+  "sandbox": "worker"
+}

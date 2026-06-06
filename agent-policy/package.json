@@ -1,0 +1,25 @@
+{
+  "name": "@agent/policy",
+  "version": "0.1.0",
+  "description": "Policy layer for philont: PermissionMatrix + AuditLog + PolicyDelegate",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/tests/*.test.js dist/tests/validators/*.test.js dist/tests/secrets/*.test.js",
+    "test:ts": "npx tsx --test tests/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

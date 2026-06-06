@@ -1,0 +1,20 @@
+{
+  "name": "@agent/demo",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "npx tsx src/main.ts"
+  },
+  "dependencies": {
+    "@agent/memory": "file:../agent-memory",
+    "@agent/policy": "file:../agent-policy",
+    "@agent/tools": "file:../agent-tools",
+    "@agent/mcp": "file:../agent-mcp",
+    "@agent/plugins": "file:../agent-plugins",
+    "@anthropic-ai/sdk": "^0.80.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

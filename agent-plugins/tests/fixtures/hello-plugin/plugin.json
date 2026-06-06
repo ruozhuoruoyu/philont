@@ -1,0 +1,8 @@
+{
+  "id": "hello",
+  "name": "Hello Plugin",
+  "version": "1.0.0",
+  "description": "Example plugin for testing",
+  "main": "index.js",
+  "providesTools": ["greet"]
+}

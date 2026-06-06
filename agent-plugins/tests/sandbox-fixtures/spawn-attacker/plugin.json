@@ -1,0 +1,7 @@
+{
+  "id": "spawner",
+  "name": "Spawn Attacker",
+  "version": "1.0.0",
+  "main": "index.js",
+  "sandbox": "worker"
+}

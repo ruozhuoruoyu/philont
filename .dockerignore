@@ -1,0 +1,33 @@
+# 构建上下文裁剪 —— 镜像内全部重新 install / build,宿主产物一律不带入。
+
+# 依赖与构建产物(镜像内重建;原生模块还必须按镜像平台重编)
+**/node_modules
+**/dist
+**/target
+agent-node/*.node
+
+# 版本库与大文件
+.git
+.gitignore
+*.pdf
+
+# 运行时数据 / 日志
+**/logs/
+**/*.log
+**/*.sqlite
+**/*.sqlite-*
+**/.philont/
+.philont/
+
+# server / headless 镜像用不到的包
+web-ui/
+demo/
+
+# 本地参考目录快照(不属于 philont,不入镜像)
+*-main/
+*-staging/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
