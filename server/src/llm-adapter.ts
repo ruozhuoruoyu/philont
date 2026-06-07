@@ -276,6 +276,13 @@ function isContextTooLargeMessage(s: string): boolean {
   );
 }
 
+/**
+ * Above this max_tokens the Anthropic SDK refuses a non-streaming request (it would imply a
+ * >10-min completion: max_tokens > 128000 × 10/60 ≈ 21333 trips the local "Streaming is required"
+ * guard). Requests above it are sent via the streaming helper instead. 21000 keeps a safe margin.
+ */
+const NONSTREAMING_MAX_TOKENS = 21000;
+
 class AnthropicAdapter implements LLMAdapter {
   private client: Anthropic;
   private readonly model: string;
@@ -348,10 +355,23 @@ class AnthropicAdapter implements LLMAdapter {
         ...(anthropicTools?.length ? { tools: anthropicTools } : {}),
         ...(wire.anthropicParams ?? {}),
       };
-      response = await this.client.messages.create(
-        createParams as unknown as Anthropic.MessageCreateParamsNonStreaming,
-        { signal: opts?.signal },
-      );
+      // 2026-06-07: the SDK refuses a NON-streaming request whose max_tokens implies a
+      // >10-min completion: it throws "Streaming is required …" locally (before sending) when
+      //   (60*60*1000 * max_tokens) / 128000 > 600000ms  ⇔  max_tokens > 21333.
+      // Raising max_tokens to 32000 for high/max reasoning (the empty-text fix) trips this on
+      // every turn. Above the threshold, stream and reassemble via finalMessage() — same
+      // Anthropic.Message shape, so all downstream handling (content blocks, stop_reason,
+      // usage, thinking-block echo) is unchanged. Small requests keep the non-streaming path.
+      if (maxTokens > NONSTREAMING_MAX_TOKENS) {
+        response = await this.client.messages
+          .stream(createParams as unknown as Anthropic.MessageStreamParams, { signal: opts?.signal })
+          .finalMessage();
+      } else {
+        response = await this.client.messages.create(
+          createParams as unknown as Anthropic.MessageCreateParamsNonStreaming,
+          { signal: opts?.signal },
+        );
+      }
     } catch (e: unknown) {
       // 400 + "too large" / "context length exceeded" → normalise to ContextTooLargeError
       // so the upper layer can trigger emergency eviction + retry
