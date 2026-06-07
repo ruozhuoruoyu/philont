@@ -109,6 +109,24 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_TOKENS = 4096;
 
 /**
+ * Aux thinking policy. 2026-06-07: aux is the cheap small-model path (summaries /
+ * classification / compression / reflection). Extended thinking is wasted cost here AND,
+ * with DEFAULT_MAX_TOKENS=4096, thinking-capable models (deepseek-v4+/reasoner, kimi) burn
+ * the whole budget on the thinking block → `returned empty content` (the reflection failure
+ * seen in production). An unset thinking field also leaves DeepSeek's default-on path engaged,
+ * risking the reasoning_content echo-400. So we DISABLE thinking explicitly on those models.
+ * Opt back in with AUX_LLM_THINKING=on if you ever point aux at a model that needs it.
+ */
+function auxThinkingDisabled(model: string): boolean {
+  if ((process.env.AUX_LLM_THINKING ?? '').trim().toLowerCase() === 'on') return false;
+  const m = (model || '').trim().toLowerCase();
+  if (m.startsWith('deepseek-v') && !m.startsWith('deepseek-v3')) return true;
+  if (m === 'deepseek-reasoner') return true;
+  if (m.includes('kimi') || m.includes('moonshot')) return true;
+  return false;
+}
+
+/**
  * Call the auxiliary LLM.
  *
  * Prefers the small model configured via environment variables; otherwise falls back to the caller
@@ -155,6 +173,9 @@ async function callOpenAICompatible(
     max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
     stream: false,
     temperature: 0.2,
+    // Disable thinking on thinking-capable models (deepseek-v4+/kimi). OpenAI-compat: the field
+    // is top-level here (raw fetch; `extra_body` is an SDK-only flatten). See auxThinkingDisabled.
+    ...(auxThinkingDisabled(cfg.model) ? { thinking: { type: 'disabled' } } : {}),
   };
 
   const timeoutSignal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
@@ -264,12 +285,15 @@ async function callAnthropicCompatible(
     max_tokens: number;
     system?: string;
     messages: Array<{ role: 'user'; content: string }>;
+    thinking?: { type: 'disabled' };
   } = {
     model: cfg.model,
     max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
     messages: [{ role: 'user', content: req.user }],
   };
   if (req.system) body.system = req.system;
+  // Disable thinking on thinking-capable models — see auxThinkingDisabled (fixes empty content).
+  if (auxThinkingDisabled(cfg.model)) body.thinking = { type: 'disabled' };
 
   const timeoutSignal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
   const signal = req.signal
