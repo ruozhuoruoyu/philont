@@ -4712,7 +4712,13 @@ async function handleChatSendInner(
   // this turn's user message as a reply rather than a new topic. Injected into the system section (messages[0]), not the user slot.
   // Only triggers when messages[0] already exists (not the first turn where system is absent) and there is a preceding natural-language assistant message.
   const priorAssistant = findLastAssistantText(messages);
-  if (priorAssistant && messages[0]) {
+  // 2026-06-07: only bind when the user message is plausibly a SHORT ANSWER to the prior question.
+  // detectUnclosedQuestion is structural (any trailing "?" on the assistant side) and topic-blind,
+  // so a NEW user question got mis-bound to an unrelated prior one — e.g. the meta-question
+  // "llm适配好了吗？" was bound to a prior "…GL(2) spectral theory?" math question. If the user
+  // message is itself a question (ends with ?/？), it cannot be a short answer → skip binding.
+  const userIsItselfAQuestion = /[?？]\s*$/.test(userMessage.trim());
+  if (priorAssistant && messages[0] && !userIsItselfAQuestion) {
     const detected = detectUnclosedQuestion(priorAssistant);
     if (detected.hasQuestion) {
       messages[0] = {

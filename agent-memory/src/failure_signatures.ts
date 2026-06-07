@@ -91,7 +91,26 @@ export function extractFailureSignature(
     return `${tool}:http-${httpStatus[1]}`;
   }
 
-  // 8. Fallback: take first 30 chars (strip ⚠ marker + excess whitespace)
+  // 8. PARI/GP exploratory-compute errors (2026-06-07): all of these otherwise fall into the
+  //    useless `other:<first 30 chars>` bucket (the GP error text varies per expression), so
+  //    repeated same-kind errors never group. Map the GP stderr to sharp classes so the
+  //    learning pipeline can cluster recurring kinds. Pure deterministic regex on lowered text.
+  if (tool === 'pariGp') {
+    if (/syntax error/.test(lower)) return `${tool}:gp-syntax`;
+    if (/incorrect type/.test(lower)) return `${tool}:gp-type`;
+    if (/variable name expected/.test(lower)) return `${tool}:gp-varname`;
+    if (/too few arguments|too many arguments/.test(lower)) return `${tool}:gp-args`;
+    if (/not a function in function call/.test(lower)) return `${tool}:gp-not-a-function`;
+    if (/computation timed out|process killed/.test(lower)) return `${tool}:gp-timeout`;
+    return `${tool}:gp-other`;
+  }
+
+  // 8b. z3 verifier errors (2026-06-07): minimal single-class mapping, same rationale as PARI/GP.
+  if (tool === 'z3Verify') {
+    return `${tool}:z3-error`;
+  }
+
+  // 9. Fallback: take first 30 chars (strip ⚠ marker + excess whitespace)
   const stripped = text
     .replace(/^[⚠✓\s]+/, '')
     .replace(/^TOOL\s*FAILED:?\s*/i, '')
@@ -101,6 +120,23 @@ export function extractFailureSignature(
     .slice(0, 30);
   return `${tool}:other:${stripped.toLowerCase()}`;
 }
+
+/**
+ * 2026-06-07: Two classes of recorded failures are NOT task-level recurring problems and were
+ * causing the `same_root_cause_failures` reflection to fire as noise every turn:
+ *
+ *   (a) Exploratory-compute tools (pariGp / z3Verify) — trial-and-error compute probes run
+ *       inside deep_explore. Their failures are normal exploration (a parallel change starts
+ *       recording them to memory_actions), not the agent hitting a task wall.
+ *   (b) Mechanism / deliberate-rejection signatures — plan_protocol_gate / in_turn_tool_block /
+ *       autonomous_blacklist / research_before_retry are protocol-layer ON-PURPOSE stops, not
+ *       the LLM hitting a wall. Mirrors the same exclusion in server/src/in_turn_reflection.ts.
+ *
+ * Both are filtered out of groupFailures (and therefore countSameRootCauseFailures) below.
+ */
+const EXCLUDED_FROM_ROOT_CAUSE = new Set<string>(['pariGp', 'z3Verify']);
+const MECHANISM_REJECTION_RE =
+  /:other:\[(plan_protocol_gate|in_turn_tool_block|autonomous_blacklist|research[_-]?before[_-]?retry)\b/i;
 
 export interface FailureCounted {
   signature: string;
@@ -143,7 +179,11 @@ export function groupFailures(
     { signature: string; count: number; latestTs: number | null; toolName: string }
   >();
   for (const f of failures) {
+    // 2026-06-07: skip exploratory-compute tools + mechanism/deliberate-rejection signatures
+    // (see EXCLUDED_FROM_ROOT_CAUSE / MECHANISM_REJECTION_RE) — not task-recurring failures.
+    if (EXCLUDED_FROM_ROOT_CAUSE.has(f.toolName)) continue;
     const sig = extractFailureSignature(f.toolName, f.result);
+    if (MECHANISM_REJECTION_RE.test(sig)) continue;
     const existing = map.get(sig);
     if (existing) {
       existing.count += 1;

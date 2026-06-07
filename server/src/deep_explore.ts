@@ -67,6 +67,7 @@ import {
 } from '@agent/tools';
 import {
   ReasoningNodeNotFoundError,
+  extractFailureSignature,
   type ReasoningStore,
   type ReasoningSession,
   type ReasoningNode,
@@ -388,6 +389,40 @@ const KIND_LABEL: Record<ReasoningNodeKind, string> = {
 };
 
 /** Render the current reasoning tree into the systemPrompt (a snapshot anchor at loop start; in-loop deltas flow via tool_result). */
+/**
+ * 2026-06-07: in-session "learn from failure" for the compute tools (pariGp / z3Verify).
+ * Within a round the mini-loop already shows the error and the model retries — but each round
+ * starts from a FRESH systemPrompt, so a PARI/GP syntax lesson is lost across rounds and the
+ * same mistake recurs (observed in production: repeated `pariGp failed: syntax error`). We keep
+ * a small per-session ring of recent compute-tool failures, deduped by the sharp signature
+ * (extractFailureSignature → e.g. `pariGp:gp-syntax`), and surface them into the next round's
+ * prompt so the model avoids repeating them. In-memory only — a session's exploration lives in
+ * one process; durable cross-session distillation (reflector → playbook) is a separate follow-up.
+ */
+interface ToolFailureMemo { sig: string; snippet: string }
+const RECENT_TOOL_FAILURES_MAX = 6;
+const sessionToolFailures = new Map<string, ToolFailureMemo[]>();
+function recordSessionToolFailure(sessionId: string, toolName: string, error: string | undefined): void {
+  const sig = extractFailureSignature(toolName, error ?? '');
+  const snippet = (error ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  const buf = sessionToolFailures.get(sessionId) ?? [];
+  // Dedup by signature: keep only the most recent example of each distinct failure class.
+  const dup = buf.findIndex((m) => m.sig === sig);
+  if (dup >= 0) buf.splice(dup, 1);
+  buf.push({ sig, snippet });
+  while (buf.length > RECENT_TOOL_FAILURES_MAX) buf.shift();
+  sessionToolFailures.set(sessionId, buf);
+}
+/** Prompt lines warning the model off its own recent pariGp/z3 mistakes this session (empty if none). */
+function renderRecentToolFailures(sessionId: string): string[] {
+  const buf = sessionToolFailures.get(sessionId);
+  if (!buf || buf.length === 0) return [];
+  const lines = ['', '## ⚠ Recent compute-tool errors this session — DO NOT repeat these patterns'];
+  for (const m of buf) lines.push(`- [${m.sig}] ${m.snippet}`);
+  lines.push('Inspect and fix the script before re-running; a malformed pariGp/z3 call wastes a round.');
+  return lines;
+}
+
 export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode[]): string {
   const lines: string[] = [];
   lines.push('You are a deep-exploreing engine advancing a reasoning tree to crack a root proposition. Record progress into the tree at every step.');
@@ -437,6 +472,8 @@ export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode
       lines.push(`- [${n.id}] ${n.claim}${tried}`);
     }
   }
+
+  for (const l of renderRecentToolFailures(session.id)) lines.push(l);
 
   lines.push('');
   lines.push('## Your actions (tools)');
@@ -509,6 +546,8 @@ export function buildDiscoverPrompt(
   lines.push('4. Prefer **strong, concrete, falsifiable** conjectures (expressible in a form pariGp can test); avoid vague, untestable ones. A few evidence-backed candidates per round is enough.');
   lines.push('5. Be bold: better to propose an aggressive conjecture that a counterexample can kill than to restate something obvious — the counterexample search is your safety net.');
   lines.push('6. Use pariGp/recall tools only for computation and recall; reason_decompose/record write to the tree. **Only use real node ids.**');
+  for (const l of renderRecentToolFailures(session.id)) lines.push(l);
+
   lines.push('');
   lines.push('## Your actions (tools)');
   lines.push('- pariGp(script): **primary** — compute data, find patterns, search counterexamples. Output with print().');
@@ -1078,6 +1117,9 @@ export function makeReasoningToolRunner(
     // computational verification quietly never works. The full error stays in the sub-LLM's tool_result.
     if (!result.ok && (name === 'pariGp' || name === 'z3Verify')) {
       console.warn(`[deep-explore] ${name} failed: ${(result.error ?? '(no error message)').slice(0, 400)}`);
+      // Learn from it: stash this failure (deduped by signature) so the next round's prompt warns
+      // the model off repeating the same pariGp/z3 mistake (renderRecentToolFailures).
+      recordSessionToolFailure(sessionId, name, result.error);
     }
     return result;
   };
@@ -1353,7 +1395,8 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
       'action="continue": keep advancing the most recent in-progress session (no id needed).\n' +
       'action="discover": **experimental-math mode** — use pariGp to compute data and find patterns, propose evidence-backed new conjectures and prune them by counterexample search, ' +
       'hanging survivors on the tree to prove later. Good when you don\'t yet know what to prove and want to discover patterns/conjectures first. Takes an optional seed (topic) or goal (creates a session if none is active).\n' +
-      'action="status": just view the current tree\'s progress, without advancing.\n' +
+      'action="status": just view the current tree\'s progress, without advancing. ' +
+      '**Grounding rule: before you state ANY claim about exploration state — what is proved, what is still open, how many nodes, or whether a direction is "new/untried" — you MUST call action=status first and base the claim on what it returns. Never assert tree state, progress, or novelty from memory.** (status is read-only and needs no authorization.)\n' +
       'action="finalize": produce a wrap-up report of the whole tree so far (established lemmas, refuted/dead-end branches, most promising open directions), without advancing. ' +
       'Use this to give the user a conclusion when they ask to wrap up / for results, or for an open-ended problem that will not converge to a clean "solved" on its own.',
     schema: {

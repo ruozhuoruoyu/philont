@@ -35,8 +35,14 @@ export const DEFAULT_BUDGET_CAPS: BudgetCaps = {
   // but K7's 24h dedup limits bridge frequency in practice, giving natural pipelining.
   // Raising perTickInitiatives 3→4 + perTickTokens 5K→7K leaves 1-2 slots for Gap/Curiosity.
   // v24: 4→5, reserves a permanent slot for active-research (dispatched with priority) without crowding Gap/Curiosity.
-  perTickTokens: 7_000,
-  perTickInitiatives: 5,
+  // 2026-06-07: 5→8. Prod logs showed `per-tick initiative cap reached (5/5)` firing constantly — the
+  // curiosity/gap engine generates far more candidate initiatives than 5/tick, so the initiative count was
+  // the standing bottleneck. perTickTokens raised 7K→16K in lockstep (8 × perInitiativeTokens of 2_000):
+  // raising the initiative cap alone would be useless because the token gate becomes the limiter
+  // (at 2_000 tokens/initiative, 7_000 only funds ~3.5 initiatives). Bumping both proportionally lets the
+  // 8-initiative cap actually take effect. perInitiativeTokens unchanged at 2_000.
+  perTickTokens: 16_000,
+  perTickInitiatives: 8,
   perInitiativeTokens: 2_000,
 };
 

@@ -93,6 +93,18 @@ export function createToolChecker(config: PolicyConfig): (input: ToolCheckInput)
     if (classifyTool) {
       const allowed = checkToolPermission(permissions, toolName, classify);
 
+      // 2026-06-07 narrow exemption: deep_explore(action:"status") is a read-only tree
+      // inspection with no side effects, but deep_explore is classified execute×self and the
+      // matrix denies execute×self uniformly — so a benign status check would trigger a
+      // pointless authorization prompt (observed: meta-question "is the llm adapted?" →
+      // outcome=auth_pending). Unlike start/continue/discover, which mutate the tree and
+      // legitimately need execute auth, status mutates nothing. Treat it as allowed (same
+      // no-denial shape as a permitted call). Scoped strictly to (deep_explore, status).
+      if (toolName === 'deep_explore' && parsedParams.action === 'status') {
+        audit.append('tool_call', { toolName, allowed: true });
+        return null;
+      }
+
       if (allowed === false) {
         const hasGrant = grantStore?.isGranted(toolName, parsedParams) ?? false;
         if (hasGrant) {
