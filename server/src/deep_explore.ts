@@ -73,6 +73,8 @@ import {
   type ReasoningNode,
   type ReasoningNodeKind,
   type ReasoningSessionStatus,
+  type ActionLog,
+  type SkillStore,
 } from '@agent/memory';
 
 const VALID_KINDS: ReadonlySet<string> = new Set([
@@ -423,7 +425,33 @@ function renderRecentToolFailures(sessionId: string): string[] {
   return lines;
 }
 
-export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode[]): string {
+/**
+ * Durable cross-session "learned lessons" surfacing (the philont failure-learning loop closed for
+ * compute tools). deep_explore records pariGp/z3 failures into the action ledger; the idle
+ * consolidator's reflector distils them into skills (incl. negative `avoid-*` anti-patterns). Here
+ * we pull the compute-relevant ones back into the round prompt so the model actually applies them.
+ * Matched by a keyword regex over name+description; top few only, to bound prompt size.
+ */
+const COMPUTE_LESSON_RE = /\b(pari\/?gp|pari|gp-(syntax|type|varname|args|timeout)|z3|smt|computation)\b/i;
+function collectComputeLessons(skills: SkillStore | undefined): string[] {
+  if (!skills) return [];
+  const seen = new Set<string>();
+  const picks: { name: string; description: string }[] = [];
+  for (const s of [...skills.listNegative(30), ...skills.listByMaturity('playbook', 30)]) {
+    if (seen.has(s.name)) continue;
+    if (COMPUTE_LESSON_RE.test(`${s.name} ${s.description}`)) {
+      picks.push(s);
+      seen.add(s.name);
+    }
+    if (picks.length >= 3) break;
+  }
+  if (picks.length === 0) return [];
+  const lines = ['', '## 📘 Learned lessons from past explorations — apply these'];
+  for (const s of picks) lines.push(`- ${s.description.split('\n')[0]}`);
+  return lines;
+}
+
+export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode[], lessons: string[] = []): string {
   const lines: string[] = [];
   lines.push('You are a deep-exploreing engine advancing a reasoning tree to crack a root proposition. Record progress into the tree at every step.');
   lines.push('');
@@ -473,6 +501,7 @@ export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode
     }
   }
 
+  for (const l of lessons) lines.push(l);
   for (const l of renderRecentToolFailures(session.id)) lines.push(l);
 
   lines.push('');
@@ -512,6 +541,7 @@ export function buildDiscoverPrompt(
   session: ReasoningSession,
   nodes: ReasoningNode[],
   seed: string,
+  lessons: string[] = [],
 ): string {
   const lines: string[] = [];
   lines.push('You are an **experimental-mathematics engine**. The goal is not to prove directly, but to use computation to discover patterns and propose new, data-backed conjectures.');
@@ -546,6 +576,7 @@ export function buildDiscoverPrompt(
   lines.push('4. Prefer **strong, concrete, falsifiable** conjectures (expressible in a form pariGp can test); avoid vague, untestable ones. A few evidence-backed candidates per round is enough.');
   lines.push('5. Be bold: better to propose an aggressive conjecture that a counterexample can kill than to restate something obvious — the counterexample search is your safety net.');
   lines.push('6. Use pariGp/recall tools only for computation and recall; reason_decompose/record write to the tree. **Only use real node ids.**');
+  for (const l of lessons) lines.push(l);
   for (const l of renderRecentToolFailures(session.id)) lines.push(l);
 
   lines.push('');
@@ -1011,6 +1042,7 @@ export function makeReasoningToolRunner(
   sessionId: string,
   delegate: (name: string, input: Record<string, unknown>) => Promise<MiniLoopToolRunResult>,
   verifyProved?: (node: ReasoningNode, argument: string | null) => Promise<VerificationTally | null>,
+  actions?: ActionLog,
 ): (name: string, input: Record<string, unknown>) => Promise<MiniLoopToolRunResult> {
   return async (name, input) => {
     if (name === 'reason_decompose') {
@@ -1120,6 +1152,19 @@ export function makeReasoningToolRunner(
       // Learn from it: stash this failure (deduped by signature) so the next round's prompt warns
       // the model off repeating the same pariGp/z3 mistake (renderRecentToolFailures).
       recordSessionToolFailure(sessionId, name, result.error);
+      // Durable path: also log into the action ledger under a DEDICATED session id (not the
+      // global timeline) so it never skews the chat turn's success-ratio, yet the idle
+      // consolidator's reflector (time-ranged, session-agnostic) still sees it and can distil a
+      // cross-session lesson. pariGp/z3Verify are excluded from same-root-cause counting
+      // (failure_signatures.ts), so this adds no reflection noise.
+      actions?.log({
+        sessionId: `deep-explore:${sessionId}`,
+        trigger: 'deep_explore',
+        toolName: name,
+        params: input,
+        result: result.error ?? null,
+        success: false,
+      });
     }
     return result;
   };
@@ -1138,6 +1183,10 @@ export interface DeepExploreDeps {
   ) => Promise<MiniLoopToolRunResult>;
   /** Read-only tool def subset (filtered from tools.list by the read-only whitelist; passed in by chat-handler) */
   readOnlyToolDefs: ToolDefinition[];
+  /** Action ledger — compute-tool (pariGp/z3) failures are logged here (under a dedicated session id) so the reflector can distil durable lessons. */
+  actions?: ActionLog;
+  /** Skill store — learned compute lessons (incl. negative anti-patterns) are surfaced back into the round prompt. */
+  skills?: SkillStore;
   maxIters?: number;
   onStatus?: (text: string) => void;
   /** Per-round progress summary sink. Unlike onStatus (per-iteration pings, console-only), this
@@ -1147,7 +1196,7 @@ export interface DeepExploreDeps {
 }
 
 export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
-  const { reasoning, miniLoopLLM, subTurnToolRunner, readOnlyToolDefs } = deps;
+  const { reasoning, miniLoopLLM, subTurnToolRunner, readOnlyToolDefs, actions, skills } = deps;
   const maxIters = deps.maxIters ?? DEFAULT_MAX_ITERS;
   // Tighten: deep_explore is a **reasoning** loop, not a browsing loop. Research tools are
   // restricted to local-only "recall your own earlier conclusions / computations" lookups;
@@ -1227,7 +1276,7 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
     // record the starting frontier ids for UCB visit accounting.
     const before = reasoning.getNodes(session.id);
     const frontierStartIds = new Set(computeFrontier(before).map((n) => n.id));
-    const systemPrompt = renderTreePrompt(session, before);
+    const systemPrompt = renderTreePrompt(session, before, collectComputeLessons(skills));
     const userMessage =
       before.length <= 1
         ? session.goal
@@ -1253,6 +1302,7 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
       session.id,
       subTurnToolRunner,
       buildVerifyProved(session, ctrl.signal),
+      actions,
     );
     let result;
     try {
@@ -1317,7 +1367,7 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
     }
     const before = reasoning.getNodes(session.id);
     const beforeConjectures = before.filter((n) => n.kind === 'conjecture').length;
-    const systemPrompt = buildDiscoverPrompt(session, before, seed);
+    const systemPrompt = buildDiscoverPrompt(session, before, seed, collectComputeLessons(skills));
     const userMessage =
       `Do experimental-math exploration around "${seed.trim() || session.goal}": first use pariGp to compute data and find patterns, ` +
       `then hang conjectures that have pariGp evidence (counterexamples already searched) on the tree via reason_decompose (kind='conjecture'); record any killed by a counterexample as refuted.`;
@@ -1336,6 +1386,7 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
       session.id,
       subTurnToolRunner,
       buildVerifyProved(session, ctrl.signal),
+      actions,
     );
     let result;
     try {

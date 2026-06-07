@@ -1479,6 +1479,11 @@ if (process.env.PHILONT_DEEP_EXPLORE !== '0') {
     miniLoopLLM,
     subTurnToolRunner,
     readOnlyToolDefs,
+    // 2026-06-07: close the failure-learning loop for compute tools — log pariGp/z3 failures to
+    // the action ledger (reflector distils durable lessons) and surface learned lessons back into
+    // the round prompt (collectComputeLessons).
+    actions: memory.actions,
+    skills: memory.skills,
     onStatus: (text) => console.log(`[deep-explore] ${text}`),
     // Surface each round's progress summary to the user. Without this the 12-min rounds are
     // silent — the user only saw the next auth prompt. web-ui gets a persistent chat bubble (its
