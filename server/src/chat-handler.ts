@@ -1400,7 +1400,7 @@ memory.configRules.on('changed', (e: { type: string }) => {
 
 // LLMAdapter does not directly support an independent system field; systemPrompt is prepended to the messages[0] user-segment prefix.
 const miniLoopLLM: MiniLoopLLMClient = {
-  async send(systemPrompt: string, messages: MiniLoopMessage[], toolDefsForSub) {
+  async send(systemPrompt: string, messages: MiniLoopMessage[], toolDefsForSub, opts?: { signal?: AbortSignal }) {
     const adjusted: NativeMessage[] = messages.length > 0
       ? messages.map((m, i) => {
           if (i === 0 && m.role === 'user' && typeof m.content === 'string') {
@@ -1413,7 +1413,10 @@ const miniLoopLLM: MiniLoopLLMClient = {
         })
       : [{ role: 'user', content: systemPrompt }];
 
-    const resp = await llm.send(adjusted, toolDefsForSub);
+    // Forward the sub-loop abort signal so the deep_explore round deadline cancels the
+    // in-flight HTTP call (LLMAdapter.send honours opts.signal), instead of the call running
+    // to its own timeout and overrunning the parent turn's 20-min hard deadline.
+    const resp = await llm.send(adjusted, toolDefsForSub, opts?.signal ? { signal: opts.signal } : undefined);
     // LLMResponse and MiniLoopLLMResponse are structurally isomorphic
     return resp as unknown as MiniLoopLLMResponse;
   },
@@ -1925,9 +1928,19 @@ interface PendingAuth {
    * and tool_result pairing can become misaligned due to timeline recall fluctuations → LLM 400.
    */
   inflightMessages: NativeMessage[];
+  /** Suspend timestamp; used to expire a stale pending so a later natural-language message is not trapped in the auth flow. */
+  ts: number;
 }
 
 const pendingAuth = new Map<string, PendingAuth>();
+
+/**
+ * pendingAuth TTL — matches the "(valid for 10 min)" shown on the auth card. After this, a pending
+ * tool is abandoned and the user's next message is handled as a normal turn (no auth re-prompt),
+ * so questions like "is the session still active?" are answered instead of being bounced as
+ * "please reply allow/deny". Keyed by ws sid like the rest of the auth state.
+ */
+const PENDING_AUTH_TTL_MS = 10 * 60_000;
 
 /** deep_explore grant window — longer than the 12-min round deadline so one approval covers a multi-round session (see the pendingAuth grant path). */
 const DEEP_EXPLORE_GRANT_TTL_MS = 60 * 60_000;
@@ -4438,8 +4451,12 @@ async function handleChatSendInner(
   if (pending) {
     pendingAuth.delete(sessionId);
 
+    // Expired pending → abandon it and handle the message as a normal turn (the auth card said
+    // "valid for 10 min"). Without this, a stale pending makes every later message run through
+    // the allow/deny classifier.
+    const expired = Date.now() - pending.ts > PENDING_AUTH_TTL_MS;
     const context = `Tool "${pending.toolName}" (${pending.capability}/${pending.domain})`;
-    const intent  = await intentClassifier.classify(userMessage, context);
+    const intent  = expired ? 'unclear' : await intentClassifier.classify(userMessage, context);
 
     if (intent === 'grant') {
       // deep_explore runs multi-round sessions where a single round can outlast the default
@@ -4496,20 +4513,21 @@ async function handleChatSendInner(
         onDelta(fallback);
       }
       return { outcome: { outcomeType: 'denied' }, auditEvents: audit.length };
-    } else {
-      // unclear: re-send the authorization request
-      onAuthRequest({
-        toolName: pending.toolName,
-        capability: pending.capability,
-        domain: pending.domain,
-        input: pending.input,
-        clarification: statusLang === 'zh'
-          ? '没有理解您的意思，请明确回复"允许"或"拒绝"。'
-          : 'I did not understand — please reply clearly with "allow" or "deny".',
-      });
-      pendingAuth.set(sessionId, pending); // put back; keep waiting
-      return { outcome: { outcomeType: 'auth_pending' }, auditEvents: 0 };
     }
+    // unclear (or expired): the reply is not a recognizable allow/deny. Do NOT re-prompt and
+    // re-arm the pending — that traps natural-language messages ("is the session still active?",
+    // "give me a progress update") in an endless "please reply allow/deny" loop. Instead abandon
+    // the suspended tool and fall through to a normal turn so the message is actually answered.
+    // (Safe: messages are rebuilt fresh each turn — K0 — so the dropped tool_use needs no cleanup.
+    // If the user really meant to run the tool, the LLM re-issues the call and re-triggers auth.)
+    onTrace?.({
+      kind: 'auth-decision', tier: 4,
+      text: expired
+        ? `Pending auth for ${pending.toolName} expired (>${Math.round(PENDING_AUTH_TTL_MS / 60_000)} min); handling message as a normal turn`
+        : `Reply to ${pending.toolName} auth was not allow/deny; handling message as a normal turn`,
+      meta: { toolName: pending.toolName },
+    });
+    // fall through to normal turn processing below
   }
 
   // ── Proactive research "request permission": user replies "agree/deny" on WeChat against a background-pushed auth card ──────
@@ -5384,6 +5402,7 @@ async function runToolLoop(
         // K0: save the current messages array in full; on authorization resume use it directly without rebuilding,
         // to avoid tool_use / tool_result pairing mismatches.
         inflightMessages: [...messages],
+        ts: Date.now(),
       });
 
       onAuthRequest({ toolName: call.name, capability, domain, input: call.input });
@@ -6569,6 +6588,7 @@ async function runToolLoop(
           collectedResults: nextResults,
           iteration: i,
           inflightMessages: [...messages],
+          ts: Date.now(),
         });
 
         onAuthRequest({ toolName: call.name, capability, domain, input: call.input });

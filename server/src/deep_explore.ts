@@ -545,6 +545,67 @@ function renderProgressText(s: ProgressSummary, hitCap: boolean, status: Reasoni
   return `${head}\nThis round: ${parts.join('; ')}`;
 }
 
+/**
+ * Build a human-facing wrap-up report from the current tree, regardless of whether the root is
+ * proved. Deterministic (no LLM call → no timeout risk): lists established lemmas, refuted/
+ * dead-end branches, and the most promising open directions. This is the "finalize / 收尾" a
+ * user asks for on an open-ended problem (e.g. Goldbach) that never converges to solved/stuck on
+ * its own — without it, every round only says "session still active" and the run ends with no
+ * conclusion. Session is left active so the user can still continue afterwards.
+ */
+function renderFinalReport(session: ReasoningSession, nodes: ReasoningNode[]): string {
+  const oneLine = (s: string, max: number): string => {
+    const t = s.replace(/\s+/g, ' ').trim();
+    return t.length > max ? t.slice(0, max) + '…' : t;
+  };
+  const status = judgeConvergence(nodes);
+  const proved = nodes.filter((n) => n.status === 'proved');
+  const refuted = nodes.filter((n) => n.status === 'refuted');
+  const dead = nodes.filter((n) => n.status === 'dead_end');
+  const frontier = computeFrontier(nodes);
+  // Rank open directions by value (unscored → 0.5), then prefer shallower (closer to the root).
+  const topOpen = [...frontier]
+    .sort((a, b) => (b.value ?? 0.5) - (a.value ?? 0.5) || a.depth - b.depth)
+    .slice(0, 8);
+
+  const head = status === 'solved' ? '✓ SOLVED' : status === 'stuck' ? '⚠ STUCK' : '◐ IN PROGRESS';
+  const lines: string[] = [];
+  lines.push(`# Deep-explore report — ${head}`);
+  lines.push(`Goal: ${session.goal}`);
+  lines.push(
+    `Tree: ${nodes.length} nodes — proved ${proved.length} / open ${frontier.length} / ` +
+      `refuted ${refuted.length} / dead ends ${dead.length}. ` +
+      `Budget spent: ${session.budgetSpent}/${SESSION_TOKEN_BUDGET} tokens.`,
+  );
+
+  if (proved.length) {
+    lines.push('\n## ✓ Established (proved lemmas / sub-results)');
+    for (const n of proved) lines.push(`- ${oneLine(n.claim, 200)}${n.result ? ` — ${oneLine(n.result, 240)}` : ''}`);
+  }
+  if (refuted.length || dead.length) {
+    lines.push('\n## ✗ Refuted / dead ends');
+    for (const n of [...refuted, ...dead]) {
+      const why = n.result || n.approachesTried[n.approachesTried.length - 1] || '';
+      lines.push(`- ${oneLine(n.claim, 160)}${why ? ` — ${oneLine(why, 180)}` : ''}`);
+    }
+  }
+  if (topOpen.length) {
+    lines.push('\n## ◯ Most promising open directions');
+    for (const n of topOpen) {
+      const tag = n.technique ? ` [${n.technique}]` : '';
+      const v = n.value != null ? ` (value ${n.value.toFixed(2)})` : '';
+      lines.push(`- ${oneLine(n.claim, 200)}${tag}${v}`);
+    }
+  }
+  lines.push(
+    status === 'solved'
+      ? '\nRoot proposition proved — session complete.'
+      : '\nReply "continue" to keep advancing the open directions above.',
+  );
+  lines.push(`session id: ${session.id}`);
+  return lines.join('\n');
+}
+
 // ── Adversarial verification (adversarial self-consistency) ─────────────────────────────────────
 // Before reason_record(proved) is committed, dispatch N independent skeptic sub-LLMs to
 // specifically "try to refute" the claim:
@@ -1082,6 +1143,15 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
     const ctrl = new AbortController();
     let timedOut = false;
     const deadlineTimer = setTimeout(() => { timedOut = true; ctrl.abort(); }, ROUND_DEADLINE_MS);
+    // Proactive heads-up partway through the round so a long round does not end "silently":
+    // tell the user it is approaching the per-round time cap and will wrap up & save soon.
+    const warnAtMs = Math.round(ROUND_DEADLINE_MS * 0.75);
+    const warnTimer = setTimeout(() => {
+      deps.onMilestone?.(
+        `⏳ This round is approaching the ${Math.round(ROUND_DEADLINE_MS / 60_000)}-minute time cap; ` +
+        `it will pause and save the tree shortly — reply "continue" to keep going.`,
+      );
+    }, warnAtMs);
 
     const boundRunner = makeReasoningToolRunner(
       reasoning,
@@ -1104,6 +1174,7 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
       });
     } finally {
       clearTimeout(deadlineTimer);
+      clearTimeout(warnTimer);
     }
 
     // Accumulate cross-turn budget (mini-loop only gives the total on return; batch-commit).
@@ -1157,6 +1228,12 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
     const ctrl = new AbortController();
     let timedOut = false;
     const deadlineTimer = setTimeout(() => { timedOut = true; ctrl.abort(); }, ROUND_DEADLINE_MS);
+    const warnTimer = setTimeout(() => {
+      deps.onMilestone?.(
+        `⏳ This round is approaching the ${Math.round(ROUND_DEADLINE_MS / 60_000)}-minute time cap; ` +
+        `it will pause and save the tree shortly — reply "continue" to keep going.`,
+      );
+    }, Math.round(ROUND_DEADLINE_MS * 0.75));
     const boundRunner = makeReasoningToolRunner(
       reasoning,
       session.id,
@@ -1178,6 +1255,7 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
       });
     } finally {
       clearTimeout(deadlineTimer);
+      clearTimeout(warnTimer);
     }
     reasoning.addBudgetSpent(session.id, result.llmTokensSpent);
 
@@ -1218,11 +1296,13 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
       'action="continue": keep advancing the most recent in-progress session (no id needed).\n' +
       'action="discover": **experimental-math mode** — use pariGp to compute data and find patterns, propose evidence-backed new conjectures and prune them by counterexample search, ' +
       'hanging survivors on the tree to prove later. Good when you don\'t yet know what to prove and want to discover patterns/conjectures first. Takes an optional seed (topic) or goal (creates a session if none is active).\n' +
-      'action="status": just view the current tree\'s progress, without advancing.',
+      'action="status": just view the current tree\'s progress, without advancing.\n' +
+      'action="finalize": produce a wrap-up report of the whole tree so far (established lemmas, refuted/dead-end branches, most promising open directions), without advancing. ' +
+      'Use this to give the user a conclusion when they ask to wrap up / for results, or for an open-ended problem that will not converge to a clean "solved" on its own.',
     schema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['start', 'continue', 'discover', 'status'] },
+        action: { type: 'string', enum: ['start', 'continue', 'discover', 'status', 'finalize'] },
         goal: { type: 'string', description: 'action=start: the root proposition to attack; action=explore with no active session: the exploration domain as the root' },
         seed: { type: 'string', description: 'action=explore optional: the topic/object to focus this round on (e.g. a family of polynomials, a sequence)' },
         assumptions: {
@@ -1294,6 +1374,14 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
             `Reasoning session "${session.goal}" (${session.id}): proved ${proved} / open ${frontier.length} / dead ends ${dead}.` +
             (frontier.length ? `\nCurrent frontier: ${frontier.slice(0, 5).map((n) => n.claim).join(' / ')}` : ''),
         };
+      }
+
+      if (action === 'finalize') {
+        const session = reasoning.getMostRecentActiveSession();
+        if (!session) return { success: true, output: 'No deep-explore session to finalize.' };
+        const report = renderFinalReport(session, reasoning.getNodes(session.id));
+        deps.onMilestone?.(report); // persist as a chat bubble so the conclusion is not lost
+        return { success: true, output: report };
       }
 
       return { success: false, output: '', error: `Unknown action: ${String(action)}` };

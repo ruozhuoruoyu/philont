@@ -63,6 +63,8 @@ export interface MiniLoopLLMClient {
     systemPrompt: string,
     messages: MiniLoopMessage[],
     toolDefs: ToolDefinition[],
+    /** Forwarded to the underlying LLM HTTP call so an in-flight request is cancelled when the round deadline fires (not just checked between iterations). */
+    opts?: { signal?: AbortSignal },
   ): Promise<MiniLoopLLMResponse>;
 }
 
@@ -91,7 +93,12 @@ export interface MiniAgentLoopOptions {
   toolBlacklist?: ReadonlySet<string>;
   /** Progress callback, fired on every LLM response and every tool call */
   onStatus?: (text: string) => void;
-  /** Abort signal — checked before each LLM call; when fired, returns immediately with error='aborted' */
+  /**
+   * Abort signal. Checked before each LLM call AND before each tool run, and forwarded into
+   * llm.send so an in-flight LLM HTTP request is cancelled the moment it fires (otherwise a
+   * single in-flight call — up to the LLM call timeout — keeps running past the round deadline
+   * and overruns the parent turn's hard deadline). When fired, returns with error='aborted'.
+   */
   abortSignal?: AbortSignal;
 }
 
@@ -204,8 +211,21 @@ export async function runMiniAgentLoop(
 
     let response: MiniLoopLLMResponse;
     try {
-      response = await llm.send(systemPrompt, messages, toolDefs);
+      response = await llm.send(systemPrompt, messages, toolDefs, { signal: abortSignal });
     } catch (e) {
+      // An aborted in-flight call surfaces here as an AbortError; report it as 'aborted'
+      // (resumable) rather than a generic llm_error so the caller's deadline branch is taken.
+      if (abortSignal?.aborted) {
+        return {
+          finalText: '',
+          toolCallHistory,
+          itersUsed: i,
+          hitCap: false,
+          llmTokensSpent,
+          toolCallsSpent,
+          error: 'aborted',
+        };
+      }
       return {
         finalText: '',
         toolCallHistory,
@@ -241,6 +261,19 @@ export async function runMiniAgentLoop(
 
     const toolResultBlocks: MiniLoopContentBlock[] = [];
     for (const call of response.calls) {
+      // Stop launching new tool runs once the deadline has fired; the tree is already
+      // persisted incrementally, so returning 'aborted' here is resumable.
+      if (abortSignal?.aborted) {
+        return {
+          finalText: '',
+          toolCallHistory,
+          itersUsed: i + 1,
+          hitCap: false,
+          llmTokensSpent,
+          toolCallsSpent,
+          error: 'aborted',
+        };
+      }
       const gateReject = gateToolCall(call.name, toolWhitelist, toolBlacklist);
       let runResult: MiniLoopToolRunResult;
       if (gateReject !== null) {

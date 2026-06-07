@@ -536,3 +536,54 @@ test('store:setNodeValues clamp + incrementVisits 累加', () => {
   assert.equal(rootNode.visits, 0);
   mem.close();
 });
+
+test('finalize:开放问题不收敛也产出收尾报告(已证引理/死路/最有希望方向)', async () => {
+  const mem = openMemoryDb(':memory:');
+  const { session, rootNode } = mem.reasoning.createSession({ goal: '哥德巴赫猜想' });
+  // 构造一棵典型的"永不收敛"树:根下挂若干子目标,一个证成引理、一个死路、其余仍 open。
+  const [proved, dead, open1, open2] = mem.reasoning.addNodes(session.id, rootNode.id, [
+    { claim: '引理: log p 无法 p-adic 化', kind: 'lemma' },
+    { claim: '路径: 直接 Mahler 插值 Λ', kind: 'subgoal' },
+    { claim: 'Dwork 理论替代圆法', kind: 'subgoal' },
+    { claim: 'p-adic L-函数卷积', kind: 'subgoal' },
+  ]);
+  const run = makeReasoningToolRunner(mem.reasoning, session.id, async () => ({ ok: true, output: '' }));
+  await run('reason_record', { nodeId: proved.id, status: 'proved', result: '拓扑不兼容,QED' });
+  await run('reason_record', { nodeId: dead.id, status: 'dead_end', approach: 'Mahler 系数不趋于 0' });
+  mem.reasoning.setNodeValues(session.id, [{ id: open1.id, value: 0.9, technique: 'p-adic-analysis' }]);
+
+  const milestones: string[] = [];
+  const tool = createDeepExploreTool({
+    reasoning: mem.reasoning, miniLoopLLM: { async send() { return { type: 'text', content: '' }; } },
+    subTurnToolRunner: async () => ({ ok: true, output: '' }), readOnlyToolDefs: [],
+    onMilestone: (t) => milestones.push(t),
+  });
+
+  const r = await tool.execute({ action: 'finalize' });
+  assert.equal(r.success, true);
+  // 即便根未证(开放问题),也给出结构化结论,而不是又一句 "still active"
+  assert.match(r.output, /Deep-explore report/);
+  assert.match(r.output, /IN PROGRESS/);
+  assert.match(r.output, /哥德巴赫猜想/);
+  assert.match(r.output, /Established/);          // 已证引理区
+  assert.match(r.output, /拓扑不兼容/);
+  assert.match(r.output, /dead ends/i);           // 死路区
+  assert.match(r.output, /promising open directions/); // 最有希望方向
+  assert.match(r.output, /Dwork/);                // 高 value 的 open 节点排在前
+  // 报告也作为 milestone 推送(持久气泡,避免结论丢失)
+  assert.equal(milestones.length, 1);
+  assert.match(milestones[0], /Deep-explore report/);
+  mem.close();
+});
+
+test('finalize:无会话 → 友好提示而非报错', async () => {
+  const mem = openMemoryDb(':memory:');
+  const tool = createDeepExploreTool({
+    reasoning: mem.reasoning, miniLoopLLM: { async send() { return { type: 'text', content: '' }; } },
+    subTurnToolRunner: async () => ({ ok: true, output: '' }), readOnlyToolDefs: [],
+  });
+  const r = await tool.execute({ action: 'finalize' });
+  assert.equal(r.success, true);
+  assert.match(r.output, /No deep-explore session/);
+  mem.close();
+});
