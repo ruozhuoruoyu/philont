@@ -28,6 +28,7 @@ import {
   type MiniLoopLLMClient,
   type MiniLoopLLMResponse,
   type MiniLoopMessage,
+  type ReasoningConfig,
 } from '@agent/tools';
 import {
   openMemoryDb,
@@ -1400,7 +1401,7 @@ memory.configRules.on('changed', (e: { type: string }) => {
 
 // LLMAdapter does not directly support an independent system field; systemPrompt is prepended to the messages[0] user-segment prefix.
 const miniLoopLLM: MiniLoopLLMClient = {
-  async send(systemPrompt: string, messages: MiniLoopMessage[], toolDefsForSub, opts?: { signal?: AbortSignal }) {
+  async send(systemPrompt: string, messages: MiniLoopMessage[], toolDefsForSub, opts?: { signal?: AbortSignal; reasoning?: ReasoningConfig }) {
     const adjusted: NativeMessage[] = messages.length > 0
       ? messages.map((m, i) => {
           if (i === 0 && m.role === 'user' && typeof m.content === 'string') {
@@ -1416,7 +1417,9 @@ const miniLoopLLM: MiniLoopLLMClient = {
     // Forward the sub-loop abort signal so the deep_explore round deadline cancels the
     // in-flight HTTP call (LLMAdapter.send honours opts.signal), instead of the call running
     // to its own timeout and overrunning the parent turn's 20-min hard deadline.
-    const resp = await llm.send(adjusted, toolDefsForSub, opts?.signal ? { signal: opts.signal } : undefined);
+    // 2026-06-07: also forward per-scenario reasoning so deep_explore rounds / skeptics can
+    // request explicit max/high thinking effort (runMiniAgentLoop threads opts.reasoning here).
+    const resp = await llm.send(adjusted, toolDefsForSub, { signal: opts?.signal, reasoning: opts?.reasoning });
     // LLMResponse and MiniLoopLLMResponse are structurally isomorphic
     return resp as unknown as MiniLoopLLMResponse;
   },
@@ -3371,6 +3374,23 @@ function withTimeout<T>(p: Promise<T>, ms: number, makeError: () => Error): Prom
 }
 
 /**
+ * 2026-06-07: Main-turn reasoning was previously implicit-always-on (the provider defaulted thinking on for
+ * every turn). It is now made EXPLICIT so it can be tuned per channel and, importantly, so we always send a
+ * concrete reasoning config — which also avoids DeepSeek's reasoning_content echo-400 trap (an absent config
+ * let stale reasoning_content leak back into the request). Tunable via PHILONT_CHAT_REASONING ∈
+ * {off,low,medium,high,max}; default `high` preserves the prior implicit-on quality. Cheap channels can set `off`.
+ */
+function mainTurnReasoning(): ReasoningConfig {
+  const raw = (process.env.PHILONT_CHAT_REASONING ?? 'high').trim().toLowerCase();
+  if (raw === 'off') return { enabled: false };
+  if (raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'max') {
+    return { enabled: true, effort: raw };
+  }
+  // Unrecognised value → fall back to the default (high).
+  return { enabled: true, effort: 'high' };
+}
+
+/**
  * Wrapper around llm.send:
  *   1. Each call is wrapped with a LLM_CALL_TIMEOUT_MS hard timeout (prevents socket hang from deadlocking the entire turn).
  *   2. If the provider throws ContextTooLargeError (400/413 + "too large"), trigger
@@ -3391,8 +3411,11 @@ async function sendLlmWithRescue(
 ): Promise<LLMResponse> {
   // Interrupt teeth: if this turn is stopped by the user, signal is passed to the underlying LLM HTTP to cancel the in-flight call.
   const signal = turnAbortSignal(sessionId);
+  // 2026-06-07: send an explicit per-turn reasoning config (see mainTurnReasoning) instead of relying on the
+  // provider's implicit always-on thinking; tunable via PHILONT_CHAT_REASONING.
+  const reasoning = mainTurnReasoning();
   const call = () =>
-    withTimeout(llm.send(messages, tools, { signal }), LLM_CALL_TIMEOUT_MS, () => new LlmTimeoutError(LLM_CALL_TIMEOUT_MS));
+    withTimeout(llm.send(messages, tools, { signal, reasoning }), LLM_CALL_TIMEOUT_MS, () => new LlmTimeoutError(LLM_CALL_TIMEOUT_MS));
   try {
     return await call();
   } catch (e) {

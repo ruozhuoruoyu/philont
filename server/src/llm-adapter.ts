@@ -4,6 +4,8 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { ToolDefinition } from '@agent/policy';
+import type { ReasoningConfig } from '@agent/tools';
+import { resolveProfile, type ProviderProfile } from './providers/index.js';
 
 // Anthropic native message format
 export type NativeMessage = Anthropic.MessageParam;
@@ -12,9 +14,18 @@ export type LLMResponse =
   | { type: 'text'; content: string }
   | { type: 'toolCalls'; calls: Array<{ id: string; name: string; input: Record<string, unknown> }>; assistantMessage: NativeMessage };
 
-/** Options for send. signal is used for mid-turn user stop (UserHardStop): passed to the underlying HTTP call to cancel in-flight requests. */
+/**
+ * Options for send.
+ *  - signal: mid-turn user stop (UserHardStop) — passed to the underlying HTTP
+ *    call to cancel in-flight requests.
+ *  - reasoning: selects thinking mode + effort for THIS call. The active
+ *    ProviderProfile (resolved from the model id) translates it into the right
+ *    per-provider wire fields. Callers pass e.g. {enabled:true, effort:'max'}
+ *    for deep_explore; omit to use the profile's per-scenario default.
+ */
 export interface LLMSendOpts {
   signal?: AbortSignal;
+  reasoning?: ReasoningConfig;
 }
 
 export interface LLMAdapter {
@@ -268,6 +279,9 @@ function isContextTooLargeMessage(s: string): boolean {
 class AnthropicAdapter implements LLMAdapter {
   private client: Anthropic;
   private readonly model: string;
+  // 2026-06-07: per-model ProviderProfile owns the reasoning/thinking wire-shape
+  // and max_tokens quirks. Resolved once from the model id (see providers/).
+  private readonly profile: ProviderProfile;
 
   constructor(apiKey: string) {
     const baseURL = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
@@ -283,6 +297,7 @@ class AnthropicAdapter implements LLMAdapter {
     // Users setting ANTHROPIC_MODEL=deepseek-v4-flash etc. can also use AnthropicAdapter
     // (these gateways proxy multiple models using the Anthropic protocol).
     this.model = process.env.ANTHROPIC_MODEL || 'deepseek-v4-flash';
+    this.profile = resolveProfile(this.model);
     // 2026-05-30: print main LLM actual config at startup (key shows only last 4 digits) —
     // instant confirmation of which endpoint / key is in use; helps debug "env not applied /
     // wrong key" class issues.
@@ -303,23 +318,40 @@ class AnthropicAdapter implements LLMAdapter {
       // extended-thinking reasoning tokens against max_tokens; 4096 gets entirely consumed
       // by thinking (stop_reason=max_tokens, content only has [thinking], no text /
       // tool_use → agent receives empty → write=0).
-      // Default 16000 (thinking 8k + answer/tools 8k). Upper clamp 65536.
-      const maxTokens = (() => {
+      // Default 16000 (thinking 8k + answer/tools 8k). Upper clamp 65536. This is the
+      // **base**; the profile may raise it further when reasoning is on (see below).
+      const baseMaxTokens = (() => {
         const raw = process.env.PHILONT_LLM_MAX_TOKENS;
         if (!raw) return 16000;
         const n = parseInt(raw, 10);
         if (Number.isFinite(n) && n >= 256 && n <= 65536) return n;
         return 16000;
       })();
+      // 2026-06-07: ProviderProfile drives the thinking/reasoning wire-shape and the
+      // effective max_tokens for this call. buildReasoningWire ALWAYS pins the thinking
+      // field on thinking-capable models (the reasoning_content echo-400 fix), and
+      // resolveMaxTokens raises the ceiling for high/max effort so thinking tokens don't
+      // starve the answer (the empty-text bug).
+      const wire = this.profile.buildReasoningWire(this.model, opts?.reasoning);
+      const maxTokens = this.profile.resolveMaxTokens(this.model, opts?.reasoning, baseMaxTokens);
       // Repair tool_use ↔ tool_result pairing before sending the request (deepseek
       // multi-tool_use + auth-pause leaves dangling tool_use → 400).
       const safeMessages = repairToolResultPairing(messages);
-      response = await this.client.messages.create({
+      // Build params as a Record then cast to the SDK param type at the boundary:
+      // `output_config` and `thinking:{type:'disabled'}` (DeepSeek extension) are not in
+      // the Anthropic SDK's typed surface, so a typed literal would not compile. The shape
+      // is correct on the wire; we keep the cast localized with this comment.
+      const createParams: Record<string, unknown> = {
         model: this.model,
         max_tokens: maxTokens,
         messages: safeMessages,
-        ...(anthropicTools?.length ? { tools: anthropicTools } : {})
-      }, { signal: opts?.signal });
+        ...(anthropicTools?.length ? { tools: anthropicTools } : {}),
+        ...(wire.anthropicParams ?? {}),
+      };
+      response = await this.client.messages.create(
+        createParams as unknown as Anthropic.MessageCreateParamsNonStreaming,
+        { signal: opts?.signal },
+      );
     } catch (e: unknown) {
       // 400 + "too large" / "context length exceeded" → normalise to ContextTooLargeError
       // so the upper layer can trigger emergency eviction + retry
@@ -352,6 +384,11 @@ class AnthropicAdapter implements LLMAdapter {
         name: c.name,
         input: c.input as Record<string, unknown>,
       }));
+      // 2026-06-07: return the FULL response.content (including any thinking/reasoning
+      // blocks) unchanged. On replay these blocks must be echoed back verbatim — with
+      // DeepSeek V4 thinking, dropping reasoning_content is exactly what triggers the
+      // HTTP 400 ("reasoning_content must be passed back"). Pinning the thinking field
+      // (above) plus echoing full content keeps that contract satisfied.
       return {
         type: 'toolCalls',
         calls,
@@ -567,12 +604,16 @@ const PROVIDERS: Record<string, ProviderConfig> = {
 };
 
 class OpenAICompatAdapter implements LLMAdapter {
+  // 2026-06-07: per-model ProviderProfile (deepseek-native / kimi / plain compat).
+  private readonly profile: ProviderProfile;
+
   constructor(
     private readonly cfg: ProviderConfig,
     private readonly apiKey: string,
     private readonly baseUrl: string,
     private readonly model: string,
   ) {
+    this.profile = resolveProfile(model);
     console.log(`[llm] main: ${cfg.name} baseURL=${baseUrl}${cfg.path} model=${model} key=${maskKey(apiKey)}`);
   }
 
@@ -591,12 +632,36 @@ class OpenAICompatAdapter implements LLMAdapter {
       },
     }));
 
+    // 2026-06-07: replace the hardcoded max_tokens=4096 with the profile-resolved
+    // ceiling. Base honours PHILONT_LLM_MAX_TOKENS (default 16000) so reasoning models
+    // reached over the OpenAI-compat path (deepseek-native endpoint, kimi) don't have
+    // thinking tokens starve the answer.
+    const baseMaxTokens = (() => {
+      const raw = process.env.PHILONT_LLM_MAX_TOKENS;
+      if (!raw) return 16000;
+      const n = parseInt(raw, 10);
+      if (Number.isFinite(n) && n >= 256 && n <= 65536) return n;
+      return 16000;
+    })();
+    const wire = this.profile.buildReasoningWire(this.model, opts?.reasoning);
+    const maxTokens = this.profile.resolveMaxTokens(this.model, opts?.reasoning, baseMaxTokens);
+
     const body: Record<string, unknown> = {
       model: this.model,
       messages: openaiMsgs,
-      max_tokens: 4096,
+      max_tokens: maxTokens,
+      // Merge profile top-level reasoning fields (e.g. reasoning_effort).
+      ...(wire.openaiTopLevel ?? {}),
     };
     if (openaiTools?.length) body.tools = openaiTools;
+    // Merge profile "extra_body" reasoning fields (e.g. thinking:{type:...}) at the **top level**.
+    // 2026-06-07: `extra_body` is an OpenAI *Python SDK* concept — the SDK flattens its keys into
+    // the top-level request JSON. This adapter posts raw JSON via fetch, so the fields must go
+    // top-level directly; nesting them under an "extra_body" key would send a literal {"extra_body":…}
+    // the gateway does not understand. (Only kimi/deepseek emit these; plain openai/glm/gemini are empty.)
+    if (wire.openaiExtraBody) {
+      for (const [k, v] of Object.entries(wire.openaiExtraBody)) body[k] = v;
+    }
 
     const url = `${this.baseUrl}${this.cfg.path}`;
     const resp = await fetch(url, {

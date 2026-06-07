@@ -64,6 +64,7 @@ export type {
   MiniLoopToolCallRecord,
   MiniAgentLoopOptions,
   MiniAgentLoopResult,
+  ReasoningConfig,
 } from './utils/mini-agent-loop.js';
 
 // ── Control tools (plan-then-execute and other orchestration) ─────────

@@ -28,6 +28,26 @@
 
 import type { ToolDefinition } from '@agent/policy';
 
+/**
+ * Per-call reasoning / thinking-mode control, threaded from the call site (deep_explore round,
+ * chat turn, status relay …) down to the LLM adapter, which translates it into the active
+ * provider's wire shape (see server/src/providers/*). Modelled on DeepSeek's thinking_mode guide
+ * + Hermes's reasoning_config:
+ *   - DeepSeek (Anthropic format): thinking on/off + `output_config.effort`
+ *   - DeepSeek (OpenAI format):   `extra_body.thinking` + top-level `reasoning_effort`
+ *
+ * `enabled` MUST be set explicitly (not left undefined) on thinking-capable models so the adapter
+ * always emits the thinking field — DeepSeek V4 defaults thinking ON and then requires the
+ * `reasoning_content` to be echoed back every turn, otherwise the first tool call 400s
+ * ("reasoning_content must be passed back"). Pinning the field dodges that trap.
+ */
+export interface ReasoningConfig {
+  /** Enable thinking mode. Omit to let the adapter apply the per-scenario default. */
+  enabled?: boolean;
+  /** Reasoning intensity. Maps to DeepSeek `output_config.effort` / `reasoning_effort`. */
+  effort?: 'low' | 'medium' | 'high' | 'max';
+}
+
 // ── Structured message types (isomorphic to Anthropic.MessageParam, but without the SDK dependency) ──────────
 
 /** Structural subset of Anthropic.ContentBlock: text / tool_use / tool_result */
@@ -63,8 +83,8 @@ export interface MiniLoopLLMClient {
     systemPrompt: string,
     messages: MiniLoopMessage[],
     toolDefs: ToolDefinition[],
-    /** Forwarded to the underlying LLM HTTP call so an in-flight request is cancelled when the round deadline fires (not just checked between iterations). */
-    opts?: { signal?: AbortSignal },
+    /** Forwarded to the underlying LLM HTTP call so an in-flight request is cancelled when the round deadline fires (not just checked between iterations). reasoning selects thinking mode + effort for this call. */
+    opts?: { signal?: AbortSignal; reasoning?: ReasoningConfig },
   ): Promise<MiniLoopLLMResponse>;
 }
 
@@ -100,6 +120,8 @@ export interface MiniAgentLoopOptions {
    * and overruns the parent turn's hard deadline). When fired, returns with error='aborted'.
    */
   abortSignal?: AbortSignal;
+  /** Reasoning / thinking-mode control for every LLM call in this loop. Forwarded into llm.send. */
+  reasoning?: ReasoningConfig;
 }
 
 export interface MiniLoopToolCallRecord {
@@ -188,6 +210,7 @@ export async function runMiniAgentLoop(
     toolBlacklist,
     onStatus,
     abortSignal,
+    reasoning,
   } = opts;
   const maxIters = Math.max(1, opts.maxIters ?? DEFAULT_MAX_ITERS);
 
@@ -211,7 +234,7 @@ export async function runMiniAgentLoop(
 
     let response: MiniLoopLLMResponse;
     try {
-      response = await llm.send(systemPrompt, messages, toolDefs, { signal: abortSignal });
+      response = await llm.send(systemPrompt, messages, toolDefs, { signal: abortSignal, reasoning });
     } catch (e) {
       // An aborted in-flight call surfaces here as an AbortError; report it as 'aborted'
       // (resumable) rather than a generic llm_error so the caller's deadline branch is taken.

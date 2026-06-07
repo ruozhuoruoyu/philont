@@ -63,6 +63,7 @@ import {
   runMiniAgentLoop,
   type MiniLoopLLMClient,
   type MiniLoopToolRunResult,
+  type ReasoningConfig,
 } from '@agent/tools';
 import {
   ReasoningNodeNotFoundError,
@@ -111,8 +112,24 @@ const SESSION_TOKEN_BUDGET = (() => {
 })();
 
 /**
+ * Mirror of chat-handler's TURN_HARD_DEADLINE_MS (20 min). Kept as a local literal to avoid a
+ * circular import (chat-handler imports this module to register deep_explore). **Must stay in
+ * sync** with chat-handler.ts:TURN_HARD_DEADLINE_MS — the clamp below depends on it.
+ */
+const TURN_HARD_DEADLINE_MIRROR_MS = 20 * 60_000;
+/**
+ * Headroom reserved between a round's graceful self-abort and the turn's hard deadline. The round
+ * must abort, then renderProgressText + onMilestone + the outer turn's reply formatting/send must
+ * complete — all before the 20-min turn deadline throws. 5 min is generous (post-round work is
+ * seconds) and also absorbs any turn time spent *before* the round started (auth / status calls).
+ */
+const ROUND_DEADLINE_TURN_HEADROOM_MS = 5 * 60_000;
+/** Hard ceiling for a round so its graceful abort always wins the race against the turn deadline. */
+const ROUND_DEADLINE_CEILING_MS = TURN_HARD_DEADLINE_MIRROR_MS - ROUND_DEADLINE_TURN_HEADROOM_MS; // 15 min
+
+/**
  * Per-round wall-clock time limit (default 12 min; env PHILONT_DEEP_EXPLORE_ROUND_DEADLINE_MS,
- * min 30s).
+ * min 30s, **hard-capped at 15 min** — see clamp below).
  *
  * Background (2026-06-03): turns have a 20-min hard deadline implemented as withTimeout
  * (Promise.race) — when it fires it only rejects the outer promise, **not the inner one**.
@@ -125,10 +142,26 @@ const SESSION_TOKEN_BUDGET = (() => {
  * each iteration → graceful stop; the tree is written incrementally, so runRound's aborted
  * branch returns "resumable". This kills orphans without hitting the hard deadline; maxIters
  * degrades to a soft upper bound that only takes effect when time allows.
+ *
+ * 2026-06-07: enforce the "safely below the turn deadline" invariant **in code**. Previously the
+ * env override (PHILONT_DEEP_EXPLORE_ROUND_DEADLINE_MS) had no upper bound — setting it to e.g.
+ * 24 min (> the 20-min turn deadline) reintroduced exactly bug ①: the turn's withTimeout threw
+ * TurnDeadlineError at 20 min, *before* the round's own graceful 24-min abort could fire, so every
+ * multi-minute round ended as "抱歉，出错了" instead of the documented "tree saved — reply continue".
+ * Clamp to ROUND_DEADLINE_CEILING_MS (15 min) so an over-large env value can never invert the order.
  */
 const ROUND_DEADLINE_MS = (() => {
   const n = Number(process.env.PHILONT_DEEP_EXPLORE_ROUND_DEADLINE_MS);
-  return Number.isInteger(n) && n >= 30_000 ? n : 720_000;
+  const requested = Number.isInteger(n) && n >= 30_000 ? n : 720_000;
+  if (requested > ROUND_DEADLINE_CEILING_MS) {
+    console.warn(
+      `[deep-explore] PHILONT_DEEP_EXPLORE_ROUND_DEADLINE_MS=${requested}ms exceeds the safe ceiling ` +
+        `${ROUND_DEADLINE_CEILING_MS}ms (turn hard deadline ${TURN_HARD_DEADLINE_MIRROR_MS}ms − ` +
+        `${ROUND_DEADLINE_TURN_HEADROOM_MS}ms headroom); clamping so the round aborts gracefully ` +
+        `before the turn deadline throws.`,
+    );
+  }
+  return Math.min(requested, ROUND_DEADLINE_CEILING_MS);
 })();
 
 /**
@@ -652,6 +685,24 @@ const SKEPTIC_MAX_ITERS = (() => {
   return Number.isInteger(n) && n >= 1 && n <= 20 ? n : 6;
 })();
 
+// 2026-06-07: per-scenario reasoning effort. Deep-reasoning rounds (proof search / discovery) are complex
+// multi-step agents → default to `max` thinking effort per DeepSeek's "complex agent → max" guidance.
+// Skeptics are independent verifiers → `high` is enough. Both tunable via env; invalid values fall back.
+function resolveEffort(raw: string | undefined, fallback: 'low' | 'medium' | 'high' | 'max'): 'low' | 'medium' | 'high' | 'max' {
+  const v = (raw ?? '').trim().toLowerCase();
+  return v === 'low' || v === 'medium' || v === 'high' || v === 'max' ? v : fallback;
+}
+/** Reasoning config for the deep_explore proof-search / discovery rounds. env PHILONT_DEEP_EXPLORE_EFFORT ∈ {low,medium,high,max}, default max. */
+const DEEP_EXPLORE_REASONING: ReasoningConfig = {
+  enabled: true,
+  effort: resolveEffort(process.env.PHILONT_DEEP_EXPLORE_EFFORT, 'max'),
+};
+/** Reasoning config for the adversarial skeptic verifiers. env PHILONT_DEEP_EXPLORE_SKEPTIC_EFFORT ∈ {low,medium,high,max}, default high. */
+const DEEP_EXPLORE_SKEPTIC_REASONING: ReasoningConfig = {
+  enabled: true,
+  effort: resolveEffort(process.env.PHILONT_DEEP_EXPLORE_SKEPTIC_EFFORT, 'high'),
+};
+
 /** Build the skeptic's systemPrompt: the claim under review + the argument + context; discipline = try hard to refute, when in doubt refute. */
 export function buildSkepticSystemPrompt(
   claim: string,
@@ -758,6 +809,8 @@ export async function runAdversarialVerification(opts: {
       toolWhitelist: opts.whitelist,
       onStatus: opts.onStatus,
       abortSignal: opts.abortSignal,
+      // 2026-06-07: skeptics are independent verifiers → high reasoning effort (tunable via PHILONT_DEEP_EXPLORE_SKEPTIC_EFFORT).
+      reasoning: DEEP_EXPLORE_SKEPTIC_REASONING,
     }).then(
       (r) => ({ verdict: parseSkepticVerdict(r.finalText), tokens: r.llmTokensSpent }),
       () => ({ verdict: null, tokens: 0 }), // single skeptic error = abstain, does not drag down the whole run
@@ -1171,6 +1224,8 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
         toolWhitelist: whitelist,
         onStatus: deps.onStatus,
         abortSignal: ctrl.signal,
+        // 2026-06-07: proof-search round is a complex multi-step agent → max reasoning effort (tunable via PHILONT_DEEP_EXPLORE_EFFORT).
+        reasoning: DEEP_EXPLORE_REASONING,
       });
     } finally {
       clearTimeout(deadlineTimer);
@@ -1252,6 +1307,8 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
         toolWhitelist: whitelist,
         onStatus: deps.onStatus,
         abortSignal: ctrl.signal,
+        // 2026-06-07: discovery round is a complex multi-step search agent → max reasoning effort (tunable via PHILONT_DEEP_EXPLORE_EFFORT).
+        reasoning: DEEP_EXPLORE_REASONING,
       });
     } finally {
       clearTimeout(deadlineTimer);
