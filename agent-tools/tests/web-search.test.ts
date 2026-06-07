@@ -6,6 +6,12 @@ const ENV_KEYS = [
   'TAVILY_API_KEY',
   'SERPER_API_KEY',
   'BRAVE_SEARCH_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_MODEL',
+  'PHILONT_WEB_SEARCH_NATIVE',
+  'PHILONT_WEB_SEARCH_SCRAPE',
+  'PHILONT_WEB_SEARCH_NATIVE_TOOL',
 ] as const;
 const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
 
@@ -18,8 +24,12 @@ function restoreEnv() {
     else process.env[k] = savedEnv[k];
   }
 }
+// Isolate a single tier per test: clear all keys, and turn OFF native + scrape by default so the
+// third-party tests run alone. Tests that exercise native/scrape re-enable them explicitly.
 function clearKeys() {
   for (const k of ENV_KEYS) delete process.env[k];
+  process.env.PHILONT_WEB_SEARCH_NATIVE = '0';
+  process.env.PHILONT_WEB_SEARCH_SCRAPE = '0';
 }
 
 interface CapturedCall {
@@ -63,10 +73,10 @@ describe('webSearchTool', () => {
   after(restoreEnv);
   beforeEach(clearKeys);
 
-  it('returns error when no backend configured', async () => {
+  it('returns error when no backend available (native+scrape off, no key)', async () => {
     const r = await webSearchTool.execute({ query: 'q' });
     assert.equal(r.success, false);
-    assert.match(r.error ?? '', /No search API key configured/);
+    assert.match(r.error ?? '', /No search backend available/);
   });
 
   describe('Tavily backend', () => {
@@ -191,7 +201,7 @@ describe('webSearchTool', () => {
       try {
         const r = await webSearchTool.execute({ query: 'q' });
         assert.equal(r.success, false);
-        assert.match(r.error ?? '', /Search failed \(tavily\)/);
+        assert.match(r.error ?? '', /tavily/);
         assert.match(r.error ?? '', /429/);
       } finally {
         fakeFetch.restore();
@@ -274,6 +284,87 @@ describe('webSearchTool', () => {
       });
       try {
         await webSearchTool.execute({ query: 'q' });
+      } finally {
+        fakeFetch.restore();
+      }
+    });
+  });
+
+  describe('native API search (tier 1)', () => {
+    it('parses web_search_tool_result blocks into title+url and is tried first', async () => {
+      process.env.PHILONT_WEB_SEARCH_NATIVE = '1'; // re-enable (clearKeys turned it off)
+      process.env.ANTHROPIC_API_KEY = 'ak';
+      process.env.ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic';
+      process.env.TAVILY_API_KEY = 'tk'; // present, but native should win and we never reach it
+      const fakeFetch = mockFetch((call) => {
+        // first (and only) call must be the native /v1/messages endpoint, not Tavily
+        assert.match(call.url, /api\.deepseek\.com\/anthropic\/v1\/messages/);
+        const body = call.body as { tools: Array<{ type: string; name: string }> };
+        assert.equal(body.tools[0].name, 'web_search');
+        return new Response(
+          JSON.stringify({
+            content: [
+              { type: 'text', text: 'Here are results' },
+              {
+                type: 'web_search_tool_result',
+                content: [
+                  { title: 'Goldbach conjecture', url: 'https://en.wikipedia.org/wiki/Goldbach', page_age: '1d' },
+                  { title: 'no-url-skip' },
+                ],
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      });
+      try {
+        const r = await webSearchTool.execute({ query: 'goldbach' });
+        assert.equal(r.success, true);
+        assert.equal(fakeFetch.calls.length, 1); // never degraded to Tavily
+        const links = JSON.parse(r.output.match(/Links: (\[.*?\])\n\n/s)![1]);
+        assert.deepEqual(links, [{ title: 'Goldbach conjecture', url: 'https://en.wikipedia.org/wiki/Goldbach' }]);
+      } finally {
+        fakeFetch.restore();
+      }
+    });
+
+    it('degrades to the third-party key when native errors', async () => {
+      process.env.PHILONT_WEB_SEARCH_NATIVE = '1';
+      process.env.ANTHROPIC_API_KEY = 'ak';
+      process.env.TAVILY_API_KEY = 'tk';
+      const fakeFetch = mockFetch((call) => {
+        if (/\/v1\/messages/.test(call.url)) return new Response('tool not supported', { status: 400 });
+        assert.match(call.url, /api\.tavily\.com/);
+        return new Response(JSON.stringify({ results: [{ title: 'fallback', url: 'https://fb' }] }), { status: 200 });
+      });
+      try {
+        const r = await webSearchTool.execute({ query: 'q' });
+        assert.equal(r.success, true);
+        assert.equal(fakeFetch.calls.length, 2); // native attempted, then Tavily
+        const links = JSON.parse(r.output.match(/Links: (\[.*?\])\n\n/s)![1]);
+        assert.deepEqual(links, [{ title: 'fallback', url: 'https://fb' }]);
+      } finally {
+        fakeFetch.restore();
+      }
+    });
+  });
+
+  describe('keyless scraping (tier 3)', () => {
+    it('parses DuckDuckGo HTML and decodes the uddg redirect', async () => {
+      process.env.PHILONT_WEB_SEARCH_SCRAPE = '1'; // re-enable; no keys → scrape is the only tier
+      const ddgHtml =
+        '<div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=' +
+        encodeURIComponent('https://example.com/page') +
+        '&rut=x">Example &amp; Co</a></div>';
+      const fakeFetch = mockFetch((call) => {
+        assert.match(call.url, /html\.duckduckgo\.com/);
+        return new Response(ddgHtml, { status: 200 });
+      });
+      try {
+        const r = await webSearchTool.execute({ query: 'q' });
+        assert.equal(r.success, true);
+        const links = JSON.parse(r.output.match(/Links: (\[.*?\])\n\n/s)![1]);
+        assert.deepEqual(links, [{ title: 'Example & Co', url: 'https://example.com/page' }]);
       } finally {
         fakeFetch.restore();
       }
