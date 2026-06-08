@@ -12,6 +12,10 @@ import {
   createToolChecker,
   GrantStore, LLMIntentClassifier, KeywordIntentClassifier,
   SecretStore,
+  createDefaultChain,
+  createPathAclValidator,
+  createDangerousCommandValidator,
+  DEFAULT_DANGEROUS_PATTERNS,
   type ToolCheckInput,
 } from '@agent/policy';
 import type { ToolDefinition } from '@agent/policy';
@@ -142,6 +146,7 @@ import {
   quickSignatureHash as quickTaskSignatureHash,
 } from './task_mode_classifier.js';
 import { replyWithMediaTool } from './tools/reply_with_media.js';
+import { setConscienceLlm } from './conscience_gate.js';
 import { semanticToolPhrase, semanticToolFailPhrase, summarizingPhrase, type PhraseLang } from './channel_phrases.js';
 import { wrapSkillToolWithReload } from './skill_install_wrapper.js';
 import { recentAttachments } from './channels/recent_attachments.js';
@@ -417,6 +422,9 @@ const extractorLlm: ExtractorLlmClient = {
     };
   },
 };
+
+// Wire the conscience gate's judge LLM (the gate stays a no-op unless PHILONT_CONSCIENCE_GATE is on).
+setConscienceLlm(extractorLlm);
 
 // Intrinsic-drive audit log: all cross-session self-domain internal writes (extractor/reflector/compactor)
 // are recorded through this AuditLog. SHA-256 chain covers all Internal-origin events.
@@ -1565,6 +1573,26 @@ export function closeMcpBridgesOnShutdown(): Promise<void> {
 }
 
 const permissions = createReadOnlyMatrix();
+
+// 2026-06-09: wire the validator chain into the server for the first time. Previously
+// `createToolChecker` was called WITHOUT a validatorChain, so pathAcl / dangerousCommands / etc.
+// existed but ran only in demos — never in production. This is the conservative "safe-deny" config
+// agreed with the maintainer (see SECURITY-DESIGN.md §5):
+//   - dangerousCommands: ONLY the hard-deny catastrophic patterns (rm -rf /, mkfs, dd on /dev,
+//     fork bomb, base64|sh, eval $(curl), writes to /etc · /boot · ~/.ssh, secret-file exfil).
+//     The grant-action patterns (git --force, sudo, …) are filtered OUT so nothing here ever needs an
+//     approval flow — this checker has no onApprovalNeeded, so a require-grant would just dead-end.
+//   - pathAcl: sensitive-path denylist (~/.ssh, .env, /etc/shadow, .aws/credentials, …). Closes the
+//     real gap that `readFile ~/.ssh/id_rsa` succeeded today. workspaceOnly stays OFF (would over-block).
+//     KNOWN TRADEOFF: this also blocks legitimate `.env` reads via the file tools.
+// NOT wired yet (breakage risk — localhost/MCP, webhooks): SSRF, urlAllowlist, egress allowlist,
+// workspaceOnly. See SECURITY-DESIGN.md for the staged plan.
+const conservativeValidatorChain = createDefaultChain({
+  pathAcl: createPathAclValidator({}),
+  dangerousCommands: createDangerousCommandValidator({
+    patterns: DEFAULT_DANGEROUS_PATTERNS.filter((p) => p.defaultAction === 'deny'),
+  }),
+});
 
 // ── K8 proactivity layer: autonomous loop ────────────────────────────────────────────
 // Runs independent ticks during idle time (default 5 min); GapDriver / CuriosityDriver scan memory
@@ -5268,6 +5296,7 @@ async function runToolLoop(
     audit,
     classifyTool: (name) => tools.classify(name),
     grantStore: grants,
+    validatorChain: conservativeValidatorChain,
   });
 
   // Phase 10 (2026-05-14): take cap based on task mode. Snapshot at entry to avoid mid-turn mode changes

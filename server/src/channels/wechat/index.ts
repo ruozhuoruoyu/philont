@@ -49,6 +49,7 @@ import {
 } from '../../push/channel.js';
 import { recordAttachment } from '../recent_attachments.js';
 import { extractUserSection, recordFilterCall } from '../../output_section_filter.js';
+import { runConscienceGate } from '../../conscience_gate.js';
 import { renderForWeChat, renderAuthPromptForWeChat } from './wechat_render.js';
 
 /** AuthRequest structure from chat-handler (provided by handleChatSend) */
@@ -322,13 +323,20 @@ function makeDispatcher(opts: {
       // means the prompt contract has weakened or been crowded out by drives/honesty reminders).
       const filtered = extractUserSection(fullText);
       recordFilterCall(filtered.usedSection);
-      const sectioned = filtered.text || fullText; // if filter also empty → fall back to raw
+      let sectioned = filtered.text || fullText; // if filter also empty → fall back to raw
       if (!filtered.usedSection) {
         logger.info('output_filter fallback (no `## 给用户` section)', {
           sessionId,
           fullLen: fullText.length,
           fallbackLen: sectioned.length,
         });
+      }
+
+      // Conscience gate (L3 send-to-human exit; no-op unless PHILONT_CONSCIENCE_GATE is on, fail-open).
+      const verdict = await runConscienceGate(sectioned);
+      if (!verdict.allow) {
+        logger.info('conscience_gate withheld outbound', { sessionId, reason: verdict.reason });
+        sectioned = '(本条回复被安全审查拦下,未发送。)';
       }
 
       // WeChat markdown conversion: table → bullet, strip **bold** / ### h, inline `code` → 「code」

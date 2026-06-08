@@ -25,6 +25,7 @@ import { checkInboundPolicy, type PolicyConfig } from '../wechat/policy.js';
 import { registerMediaChannel, unregisterMediaChannel } from '../registry.js';
 import { registerPushChannel, unregisterPushChannel, type PushChannel } from '../../push/channel.js';
 import { extractUserSection, recordFilterCall } from '../../output_section_filter.js';
+import { runConscienceGate } from '../../conscience_gate.js';
 
 /** AuthRequest structure from chat-handler. */
 export type AuthRequestPayload = {
@@ -178,7 +179,13 @@ function makeDispatcher(opts: {
     if (fullText.length > 0) {
       const filtered = extractUserSection(fullText);
       recordFilterCall(filtered.usedSection);
-      const sectioned = filtered.text || fullText;
+      let sectioned = filtered.text || fullText;
+      // Conscience gate (L3 send-to-human exit; no-op unless PHILONT_CONSCIENCE_GATE is on, fail-open).
+      const verdict = await runConscienceGate(sectioned);
+      if (!verdict.allow) {
+        logger.info('conscience_gate withheld outbound', { sessionId, reason: verdict.reason });
+        sectioned = '(本条回复被安全审查拦下,未发送。)';
+      }
       const rendered = renderForTelegram(sectioned).trim();
       if (rendered.length > 0) {
         try {
