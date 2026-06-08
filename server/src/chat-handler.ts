@@ -4928,15 +4928,18 @@ async function handleChatSendInner(
     const response = await sendLlmWithRescue(messages, toolDefs, sessionId, onTrace);
 
     if (response.type === 'text') {
-      messages.push({ role: 'assistant', content: response.content });
-      onDelta(response.content);
+      // Anti-fabrication: a no-tool first response that claims deep_explore round/session results
+      // is invented (no deep_explore ran). Replace with an honest message before it goes out.
+      const safeText = guardDeepExploreFabrication(response.content, signalBus);
+      messages.push({ role: 'assistant', content: safeText });
+      onDelta(safeText);
       // Layer 0 append: assistant text response goes into the global timeline
       memory.raw.appendMessage({
         sessionId: GLOBAL_TIMELINE_SESSION_ID,
         role: 'assistant',
-        content: response.content,
+        content: safeText,
       });
-      return { outcome: { outcomeType: 'response', text: response.content }, auditEvents: audit.length };
+      return { outcome: { outcomeType: 'response', text: safeText }, auditEvents: audit.length };
     }
 
     // 2026-05-07 #1 cont: tool_use.input in the assistantMessage returned by the LLM provider
@@ -5213,6 +5216,35 @@ const DEEP_EXPLORE_ONE_ROUND_MSG =
   'Each turn advances deep_explore by at most one round (~15 min) to stay under the turn time limit. ' +
   'This turn already ran one round and saved the tree. Tell the user the round is done and to reply "continue" ' +
   'to advance the next round in a fresh turn — do NOT call deep_explore(start/continue/discover) again this turn.';
+
+/**
+ * 2026-06-08: anti-fabrication gate (mechanism layer — prompt-level guidance kept failing).
+ * Observed: on "继续"/"启动" the model returns text (tools=0, ~15s) that INVENTS a deep_explore
+ * round result from the saved-snapshot numbers — "第N轮 / 时间帽 / x开→y开 / 已启动 session <id>" —
+ * presenting fake math progress as real. These markers can only be TRUE if deep_explore actually
+ * ran this turn. So: if the response claims them AND no deep_explore tool ran this turn → it's
+ * fabrication; replace with an honest message. A response that DID call deep_explore (calledDeepExplore)
+ * is never gated — a real round legitimately reports "第N轮…". Markers are deliberately specific
+ * (round/session events), not generic words like 死胡同/已证, to avoid false-positives on summaries.
+ */
+const DEEP_EXPLORE_FABRICATION_RE =
+  /时间帽|第\s*\d+\s*轮|\d+\s*开\s*(?:→|->|—>)\s*\d+\s*开|已启动[^。\n]{0,40}session\s*[0-9a-fA-F][0-9a-fA-F-]{5,}/;
+const DEEP_EXPLORE_FABRICATION_REPLY =
+  '## For User\n' +
+  '我这一回合并没有真正运行 deep_explore——"第N轮 / 已证 / 时间帽 / x开→y开 / 已启动 session" 这类是**已保存的状态快照,不是这次跑出来的**。' +
+  '要真正推进,请回复"继续",我会**实际调用 deep_explore 跑一轮**(约需数分钟);要看当前真实进度,我去调 deep_explore(action=status)。\n\n' +
+  '## Work Log\n' +
+  '[fabrication-gate] 本回合未实际调用 deep_explore 却声称了回合/会话结果 → 已拦截并替换为如实说明。';
+
+/** Returns the safe outgoing text: if it fabricates deep_explore progress (claims a round/session result with no deep_explore call this turn), replace it with an honest message. */
+function guardDeepExploreFabrication(text: string, signalBus: TurnSignalBus): string {
+  const calledDeepExplore = (signalBus.inTurnRecords ?? []).some((r) => r.toolName === 'deep_explore');
+  if (calledDeepExplore || !DEEP_EXPLORE_FABRICATION_RE.test(text)) return text;
+  console.warn(
+    '[fabrication-gate] blocked fabricated deep_explore progress (response claimed round/session results but no deep_explore call this turn)',
+  );
+  return DEEP_EXPLORE_FABRICATION_REPLY;
+}
 
 async function runToolLoop(
   sessionId: string,
@@ -6349,15 +6381,19 @@ async function runToolLoop(
         }
       }
 
-      messages.push({ role: 'assistant', content: response.content });
-      onDelta(response.content);
+      // Anti-fabrication: block a tool-loop text response that claims deep_explore round/session
+      // results when no deep_explore tool actually ran this turn (e.g. it called list_facts then
+      // invented "第N轮/时间帽"). A response that did call deep_explore reports legitimately.
+      const safeText = guardDeepExploreFabrication(response.content, signalBus);
+      messages.push({ role: 'assistant', content: safeText });
+      onDelta(safeText);
       // Layer 0 append: assistant text response goes into the global timeline
       memory.raw.appendMessage({
         sessionId: GLOBAL_TIMELINE_SESSION_ID,
         role: 'assistant',
-        content: response.content,
+        content: safeText,
       });
-      return { outcome: { outcomeType: 'response', text: response.content }, auditEvents: audit.length };
+      return { outcome: { outcomeType: 'response', text: safeText }, auditEvents: audit.length };
     }
 
     // Same as #1: subsequent loop iterations also need to sanitize assistantMessage tool_use blocks
@@ -6787,14 +6823,15 @@ async function runToolLoop(
       // Invariant: must call onDelta before returning outcome.text — the frontend treats
       // `final outcome=response` as "content already delivered via delta stream" and stays silent.
       // This line was once omitted here, causing the maxIterations fallback summary to never reach the frontend.
-      onDelta(summary.content);
+      const safeText = guardDeepExploreFabrication(summary.content, signalBus);
+      onDelta(safeText);
       memory.raw.appendMessage({
         sessionId: GLOBAL_TIMELINE_SESSION_ID,
         role: 'assistant',
-        content: summary.content,
+        content: safeText,
       });
       return {
-        outcome: { outcomeType: 'response', text: summary.content },
+        outcome: { outcomeType: 'response', text: safeText },
         auditEvents: audit.length,
       };
     }

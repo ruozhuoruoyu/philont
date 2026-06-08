@@ -111,18 +111,25 @@ test('不同 sessionId 不串', () => {
 
 // ── 6. opts 参数透传 ──────────────────────────────────────────────────
 
-test('sinceMin / maxFailures 参数透传', () => {
+test('sinceMin / maxFailures 参数透传(按 kind 去重后,maxFailures 截不同 kind)', () => {
   const { audit } = setup();
-  for (let i = 0; i < 10; i++) {
-    audit.append('task_failure_mode', {
-      sessionId: SESSION_A,
-      kind: 'iter_cap_hit',
-    });
+  // 2026-06-08: injection now dedups by kind (a persistent failure no longer piles up identical
+  // entries). So maxFailures caps the number of DISTINCT kinds. Inject 5 distinct kinds, cap at 3.
+  for (const kind of ['iter_cap_hit', 'turn_deadline', 'llm_timeout', 'llm_api_error', 'tool_failure_burst']) {
+    audit.append('task_failure_mode', { sessionId: SESSION_A, kind });
   }
-  const r = buildFailureRecoveryInjection(audit, SESSION_A, 'hi', {
-    maxFailures: 3,
-  });
+  const r = buildFailureRecoveryInjection(audit, SESSION_A, 'hi', { maxFailures: 3 });
   assert.equal(r.recentFailures.length, 3);
+});
+
+test('注入按 kind 去重:同一 kind 重复 N 次只列 1 条(反 reflection_triggered 刷屏)', () => {
+  const { audit } = setup();
+  for (let i = 0; i < 6; i++) {
+    audit.append('task_failure_mode', { sessionId: SESSION_A, kind: 'reflection_triggered' });
+  }
+  const r = buildFailureRecoveryInjection(audit, SESSION_A, 'hi');
+  assert.equal(r.recentFailures.length, 1);
+  assert.equal(r.recentFailures[0].kind, 'reflection_triggered');
 });
 
 // ── 7. text 长度合理(< 1500 chars 防 prompt 膨胀)────────────────────

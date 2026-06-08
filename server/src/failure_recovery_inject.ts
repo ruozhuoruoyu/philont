@@ -79,6 +79,12 @@ export function buildFailureRecoveryInjection(
 
   const events = audit.getEvents();
   const recentFailures: FailureRecord[] = [];
+  // 2026-06-08: dedup by kind. On a persistent failure (e.g. mycox same_root_cause), reflection
+  // fires every turn and writes a fresh `reflection_triggered` audit entry each time; the old loop
+  // injected ALL of them, so the hint count climbed 1→2→3→4… every turn, spamming the prompt with
+  // identical meta-signals. Keep only the most-recent entry of each kind — the signal ("this kind
+  // of failure has been recurring") is fully conveyed by one, the rest are pure noise.
+  const seenKinds = new Set<FailureKind>();
 
   // Scan in reverse order (most recent first)
   for (let i = events.length - 1; i >= 0 && recentFailures.length < maxFailures; i--) {
@@ -89,6 +95,8 @@ export function buildFailureRecoveryInjection(
     if (data.sessionId !== sessionId) continue;
     const kind = data.kind;
     if (typeof kind !== 'string' || !isFailureKind(kind)) continue;
+    if (seenKinds.has(kind as FailureKind)) continue; // already have a (more recent) entry of this kind
+    seenKinds.add(kind as FailureKind);
     const detail = typeof data.detail === 'string' ? data.detail : undefined;
     recentFailures.push({
       kind: kind as FailureKind,

@@ -184,6 +184,18 @@ export interface ReflectionRunOptions {
 }
 
 /**
+ * 2026-06-08: per-session reflection cooldown. On a persistent failure (e.g. mycox same_root_cause
+ * failures sitting in the 24h window) the SAME reason-set triggers reflection every single turn —
+ * re-running the fire-and-forget reflection LLM call and writing a fresh `reflection_triggered`
+ * audit entry each time. That wasted tokens and made failure_recovery_inject pile up identical
+ * hints (1→2→3→4). Skip re-firing for the same reason-set within the cooldown; a genuinely new
+ * signal (different reasons) bypasses it. In-memory (per process) — exactly the right scope, since
+ * the goal is just to not spam within a session.
+ */
+const REFLECTION_COOLDOWN_MS = 10 * 60_000;
+const lastReflectionFire = new Map<string, { ts: number; reasonsKey: string }>();
+
+/**
  * Evaluate and execute reflection. Fire-and-forget: caller does not await; all exceptions
  * are caught internally.
  *
@@ -213,6 +225,18 @@ export async function maybeRunReflection(opts: ReflectionRunOptions): Promise<vo
       }
       return;
     }
+
+    // Cooldown: same reason-set on the same session within REFLECTION_COOLDOWN_MS → skip (see above).
+    const reasonsKey = decision.reasons.slice().sort().join(',');
+    const prevFire = lastReflectionFire.get(opts.sessionId);
+    if (prevFire && prevFire.reasonsKey === reasonsKey && Date.now() - prevFire.ts < REFLECTION_COOLDOWN_MS) {
+      console.log(
+        `[reflection] session=${opts.sessionId} skipped (same reasons "${reasonsKey}" fired ` +
+          `${Math.round((Date.now() - prevFire.ts) / 60_000)}min ago, within ${REFLECTION_COOLDOWN_MS / 60_000}min cooldown)`,
+      );
+      return;
+    }
+    lastReflectionFire.set(opts.sessionId, { ts: Date.now(), reasonsKey });
 
     console.log(
       `[reflection] session=${opts.sessionId} triggered reasons=${decision.reasons.join(',')} ` +
