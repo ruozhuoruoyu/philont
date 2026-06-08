@@ -194,6 +194,46 @@ function effectiveRoundDeadlineMs(): number {
 }
 
 /**
+ * No-progress early-stop threshold. A round otherwise runs to its full wall-clock cap even when
+ * spinning — the prompt pushes "always advance the tree", so the model rarely returns plain text
+ * and the loop only ends on the deadline. A round that just fails pariGp / computes endlessly /
+ * never commits a node burns the whole budget for nothing. env PHILONT_DEEP_EXPLORE_NO_PROGRESS_CAP,
+ * default 10 (generous: a few pariGp computations before a record won't trip it), min 3.
+ */
+const NO_PROGRESS_CAP = (() => {
+  const n = Number(process.env.PHILONT_DEEP_EXPLORE_NO_PROGRESS_CAP);
+  return Number.isInteger(n) && n >= 3 ? n : 10;
+})();
+
+/**
+ * Wrap a round's tool runner so the round aborts early once it has made NO tree progress for
+ * NO_PROGRESS_CAP consecutive tool calls. "Progress" = a successful reason_decompose / reason_record
+ * (any status — recording a dead_end IS progress, it's backtracking). pariGp/recall/failed calls do
+ * NOT reset the counter. Steady progress keeps resetting it, so a genuinely productive round (which
+ * is exactly the one that SHOULD use the full time budget) is never cut — only a stalled/spinning
+ * round stops early. `stalled.value` lets the caller render a "no progress" tail instead of a timeout.
+ */
+export function withNoProgressStop(
+  base: (name: string, input: Record<string, unknown>) => Promise<MiniLoopToolRunResult>,
+  abort: () => void,
+): { runner: (name: string, input: Record<string, unknown>) => Promise<MiniLoopToolRunResult>; stalled: { value: boolean } } {
+  let callsSinceProgress = 0;
+  const stalled = { value: false };
+  const runner = async (name: string, input: Record<string, unknown>) => {
+    const r = await base(name, input);
+    callsSinceProgress++;
+    if (r.ok && (name === 'reason_decompose' || name === 'reason_record')) callsSinceProgress = 0;
+    if (callsSinceProgress >= NO_PROGRESS_CAP && !stalled.value) {
+      stalled.value = true;
+      console.warn(`[deep-explore] no-progress early stop: ${callsSinceProgress} tool calls without a tree commit`);
+      abort();
+    }
+    return r;
+  };
+  return { runner, stalled };
+}
+
+/**
  * Value-guided node selection (LATS/rStar style) master switch. On by default;
  * set env PHILONT_DEEP_EXPLORE_VALUE_GUIDED=0 to disable → reverts to old behaviour
  * (frontier ordered by depth/creation time; "LLM picks the most promising one").
@@ -1359,12 +1399,15 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
       );
     }, warnAtMs);
 
-    const boundRunner = makeReasoningToolRunner(
-      reasoning,
-      session.id,
-      subTurnToolRunner,
-      buildVerifyProved(session, ctrl.signal),
-      actions,
+    const { runner: boundRunner, stalled } = withNoProgressStop(
+      makeReasoningToolRunner(
+        reasoning,
+        session.id,
+        subTurnToolRunner,
+        buildVerifyProved(session, ctrl.signal),
+        actions,
+      ),
+      () => ctrl.abort(),
     );
     let result;
     try {
@@ -1409,9 +1452,11 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
     deps.onMilestone?.(text);
     const tail =
       result.error === 'aborted'
-        ? timedOut
-          ? `\n(this round hit the ${Math.round(roundDeadlineMs / 60_000)}-minute time cap; tree saved — reply "continue" to keep going)`
-          : '\n(this round was aborted; tree saved, you can continue)'
+        ? stalled.value
+          ? '\n(no tree progress for a while this round — only failed/unproductive tool calls — so it stopped early; tree saved. Try a different angle / new idea, or reply "continue".)'
+          : timedOut
+            ? `\n(this round hit the ${Math.round(roundDeadlineMs / 60_000)}-minute time cap; tree saved — reply "continue" to keep going)`
+            : '\n(this round was aborted; tree saved, you can continue)'
         : '';
     return { success: true, output: `${text}${tail}\nsession id: ${session.id}` };
   }
@@ -1444,12 +1489,15 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
         `it will pause and save the tree shortly — reply "continue" to keep going.`,
       );
     }, Math.round(roundDeadlineMs * 0.75));
-    const boundRunner = makeReasoningToolRunner(
-      reasoning,
-      session.id,
-      subTurnToolRunner,
-      buildVerifyProved(session, ctrl.signal),
-      actions,
+    const { runner: boundRunner, stalled } = withNoProgressStop(
+      makeReasoningToolRunner(
+        reasoning,
+        session.id,
+        subTurnToolRunner,
+        buildVerifyProved(session, ctrl.signal),
+        actions,
+      ),
+      () => ctrl.abort(),
     );
     let result;
     try {
@@ -1484,9 +1532,11 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
     const list = survivors.slice(0, 5).map((n) => `- [${n.id}] ${n.claim}`).join('\n');
     const tail =
       result.error === 'aborted'
-        ? timedOut
-          ? `\n(hit the time cap; saved — you can keep exploring)`
-          : '\n(this round was aborted; saved)'
+        ? stalled.value
+          ? '\n(no new conjectures / progress for a while — stopped early; saved. Try a different angle, or continue.)'
+          : timedOut
+            ? `\n(hit the time cap; saved — you can keep exploring)`
+            : '\n(this round was aborted; saved)'
         : result.hitCap
           ? '\n(hit the iteration cap; you can explore again)'
           : '';
