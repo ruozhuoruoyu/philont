@@ -165,7 +165,17 @@ export function buildReasoningProgressSection(
   if (frontier.length) {
     lines.push('- 当前在攻:' + frontier.slice(0, topFrontier).map((n) => n.claim).join(' / '));
   }
-  lines.push('→ 要接着推进就调 deep_explore(action=continue)。');
+  // 2026-06-08: this is background context, NOT a standing instruction. The old imperative line
+  // ("要接着推进就调 continue") made the model auto-continue the reasoning session on EVERY turn —
+  // even for an unrelated request like "清除定时任务" — running a multi-minute round before (or
+  // instead of) doing what the user asked, and (because listActiveSessions is global) pulling a
+  // session started in another channel into the current one. Make it explicitly subordinate to the
+  // user's current request.
+  lines.push(
+    '→ 仅为后台进展参考(可能来自其它渠道/会话)。**优先处理用户当前这条消息的实际请求**;' +
+    '只有当用户明确要求"继续/推进这项推理"时,才调 deep_explore(action=continue)(它会阻塞当前回合数分钟);' +
+    '用户问的是别的事(哪怕无关)就不要擅自续跑。',
+  );
 
   const out = lines.join('\n');
   return out.length > maxChars ? out.slice(0, maxChars) + '… (截断)' : out;
