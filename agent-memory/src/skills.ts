@@ -481,6 +481,29 @@ export class SkillStore extends EventEmitter {
   }
 
   /**
+   * 2026-06-08: cap reflection-distilled DRAFT skills to bound skill-store bloat. The idle reflector
+   * mints new draft skills every cycle; with no cap the store grows unboundedly, the reflector keeps
+   * re-distilling near-duplicates, and skill scans/injection get noisier (and feed memory-prefix
+   * growth). Evict the LOWEST-scored drafts (scoreSkill: unused / old / failing first) once drafts
+   * exceed maxDrafts. ONLY `draft` maturity is touched — confirmed/stable/playbook (promoted,
+   * curated) and external (disk SKILL.md) skills are never pruned here. Returns the number deleted.
+   */
+  pruneDraftsToCap(maxDrafts: number): number {
+    if (!Number.isFinite(maxDrafts) || maxDrafts < 0) return 0;
+    const drafts = (
+      this.db.prepare(`SELECT * FROM memory_skills WHERE maturity = 'draft'`).all() as SkillRow[]
+    ).map(rowToSkill);
+    if (drafts.length <= maxDrafts) return 0;
+    const now = Date.now();
+    // ascending by score → lowest-value (unused/old/failing) drafts first
+    const sorted = drafts.slice().sort((a, b) => scoreSkill(a, now) - scoreSkill(b, now));
+    const toDelete = sorted.slice(0, drafts.length - maxDrafts);
+    let deleted = 0;
+    for (const s of toDelete) if (this.deleteSkill(s.name)) deleted++;
+    return deleted;
+  }
+
+  /**
    * List all skills whose source starts with the specified prefix (for ClawHub list / filtering by registry).
    *
    * Example: listBySourcePrefix('clawhub:') returns all ClawHub-loaded skills,

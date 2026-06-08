@@ -285,23 +285,49 @@ export class SessionReflector {
             });
           }
         } else {
-          const skill = this.skills.createSkill({
-            name: spec.name,
-            description: spec.description,
-            triggerKeywords: spec.trigger_keywords,
-            actionTemplate: spec.action_template,
-            kind,
-          });
-          created.push(skill);
-          this.auditHook?.append('self_domain_write', {
-            source: 'reflector',
-            origin: 'Internal',
-            toolName: 'create_skill',
-            sessionId: tag,
-            skillId: skill.id,
-            skillName: skill.name,
-            kind,
-          });
+          // 2026-06-08: similarity dedup. The idle reflector previously only checked EXACT name, so
+          // it minted near-duplicate skills every cycle (e.g. avoid-pari-syntax vs avoid-pari-gp-syntax)
+          // → unbounded skill bloat. If a sufficiently-similar positive skill already exists, MERGE
+          // into it instead (mirrors applyReflection's MECE check). pruneDraftsToCap caps the rest.
+          const dup = kind === 'positive' ? this.skills.findDuplicateCandidates(spec.name)[0] : undefined;
+          if (dup) {
+            const skill = this.skills.updateSkill(dup.skill.name, {
+              description: spec.description,
+              triggerKeywords: spec.trigger_keywords,
+              actionTemplate: spec.action_template,
+            });
+            if (skill) {
+              updated++;
+              this.auditHook?.append('self_domain_write', {
+                source: 'reflector',
+                origin: 'Internal',
+                toolName: 'update_skill',
+                sessionId: tag,
+                skillId: skill.id,
+                skillName: skill.name,
+                kind,
+                note: `merged near-duplicate "${spec.name}" → "${dup.skill.name}" (jaccard ${dup.jaccard.toFixed(2)})`,
+              });
+            }
+          } else {
+            const skill = this.skills.createSkill({
+              name: spec.name,
+              description: spec.description,
+              triggerKeywords: spec.trigger_keywords,
+              actionTemplate: spec.action_template,
+              kind,
+            });
+            created.push(skill);
+            this.auditHook?.append('self_domain_write', {
+              source: 'reflector',
+              origin: 'Internal',
+              toolName: 'create_skill',
+              sessionId: tag,
+              skillId: skill.id,
+              skillName: skill.name,
+              kind,
+            });
+          }
         }
       } catch {
         // Skip invalid skills
@@ -311,6 +337,14 @@ export class SessionReflector {
     // Feedback loop: scan linked_skill actions in this range, feed success/failure back to SkillStore
     recordLinkedSkillOutcomes(actions, this.skills);
 
+    // 2026-06-08: cap draft skills so the reflector can't grow the store unboundedly (it mints new
+    // drafts every idle cycle). Evicts the lowest-scored unused drafts; curated/promoted skills
+    // (confirmed/stable/playbook) and disk-loaded skills are never touched.
+    const prunedDrafts = this.skills.pruneDraftsToCap(MAX_DRAFT_SKILLS);
+    if (prunedDrafts > 0) {
+      console.log(`[reflector] pruned ${prunedDrafts} low-value draft skill(s) (cap ${MAX_DRAFT_SKILLS})`);
+    }
+
     return {
       skillsCreated: created.length,
       skillsUpdated: updated,
@@ -319,6 +353,12 @@ export class SessionReflector {
     };
   }
 }
+
+/** Max retained `draft` skills (reflection churn cap). env PHILONT_MAX_DRAFT_SKILLS, default 40, min 5. */
+const MAX_DRAFT_SKILLS = (() => {
+  const n = Number(process.env.PHILONT_MAX_DRAFT_SKILLS);
+  return Number.isInteger(n) && n >= 5 ? n : 40;
+})();
 
 /**
  * Feed the success/failure signals of linked_skill actions in this session back to SkillStore.

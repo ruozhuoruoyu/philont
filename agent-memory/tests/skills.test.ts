@@ -94,6 +94,37 @@ test('SkillStore: create and retrieve', () => {
   assert.equal(fetched.id, skill.id);
 });
 
+test('SkillStore: pruneDraftsToCap 只淘汰 draft、封顶、保护已晋升/非 draft', () => {
+  const { skills } = openMemoryDb(':memory:');
+  // 6 个 draft(默认 maturity=draft)+ 1 个 playbook(已晋升,应被保护)
+  for (let i = 0; i < 6; i++) {
+    skills.createSkill({
+      name: `draft-skill-${i}`,
+      description: `draft lesson ${i}`,
+      triggerKeywords: [`k${i}`],
+      actionTemplate: `do ${i}`,
+    });
+  }
+  skills.createSkill({
+    name: 'curated-playbook',
+    description: 'a promoted playbook',
+    triggerKeywords: ['kp'],
+    actionTemplate: 'curated steps',
+    maturity: 'playbook',
+  });
+  assert.equal(skills.count(), 7);
+
+  const deleted = skills.pruneDraftsToCap(2);
+  assert.equal(deleted, 4); // 6 drafts → cap 2 → delete 4
+  assert.equal(skills.count(), 3); // 2 drafts + 1 playbook
+  assert.ok(skills.getByName('curated-playbook'), 'promoted playbook must NOT be pruned');
+  const remainingDrafts = skills.listAll(100).filter((s) => s.maturity === 'draft').length;
+  assert.equal(remainingDrafts, 2);
+
+  // under cap → no-op
+  assert.equal(skills.pruneDraftsToCap(10), 0);
+});
+
 test('SkillStore: search by keyword', () => {
   const { skills } = openMemoryDb(':memory:');
 
