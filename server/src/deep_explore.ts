@@ -536,8 +536,9 @@ function collectComputeLessons(skills: SkillStore | undefined): string[] {
 const PARI_GP_PRIMER: readonly string[] = [
   '## pariGp syntax reminders (avoid the common errors)',
   '- Define a function at top level as `f(x) = (...; expr)`. `my(...)` ONLY declares locals INSIDE a function/block body — `my(a=...)` at top level is a syntax error.',
-  '- Do NOT redefine built-in names as variables: `I` (√-1), `Pi`, `O`, `Euler`, `sigma`, `eta`, `theta`, `zeta` etc. are reserved — `sigma=1.0` errors. Use `s`, `sig`, `t0`, …',
-  '- `for(i=1,N, body)` takes the body as the 3rd comma-arg; balance every `(` `)` and separate statements with `;`. An unbalanced loop gives "unexpected end of file".',
+  '- Do NOT reuse BUILT-IN names as variables. Reserved constants: `I` (√-1), `Pi`, `O`, `Euler`. Reserved FUNCTIONS: `primes`, `prime`, `factor`, `isprime`, `nextprime`, `divisors`, `sigma`, `eulerphi`, `moebius`, `gcd`, `lcm`, `sum`, `prod`, `eta`, `theta`, `zeta`, … — `primes=primes(N)` or `sigma=1.0` errors ("variable name expected"). Use a fresh name: `pp=primes(N)`, `s=1.0`.',
+  '- To INDEX a result, store it in a variable first: `pp=primes(N); pp[i]`. You cannot index or assign a function — `primes[i]` gives "not a vector (t_CLOSURE)".',
+  '- Every `for(...)` / `if(...)` / `while(...)` must be CLOSED with a matching `)`, even when written across lines — "unexpected end of file, expecting )" means a `)` is missing. Prefer a compact single-line body, e.g. `for(i=1,N, s=s+f(i))`; separate statements with `;`. Count your parentheses before running.',
   '- Anonymous function is `(x) -> expr`. A name used like `g(x)` where `g` is not a function gives "not a function in function call".',
   '- Always `print(...)` your conclusion — only printed text is returned to you.',
 ];
