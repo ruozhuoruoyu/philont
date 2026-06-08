@@ -159,22 +159,26 @@ export function buildReasoningProgressSection(
   const proved = nodes.filter((n) => n.status === 'proved').length;
   const dead = nodes.filter((n) => n.status === 'dead_end').length;
 
-  const lines: string[] = ['## 进行中的深度推理'];
+  const lines: string[] = ['## 进行中的深度推理(已保存的状态快照,不是本回合的结果)'];
   lines.push(`- 难题:${session.goal}`);
-  lines.push(`- 进展:已证 ${proved} / 待攻(frontier) ${frontier.length} / 死胡同 ${dead}`);
+  lines.push(`- 上次保存时:已证 ${proved} / 待攻(frontier) ${frontier.length} / 死胡同 ${dead}`);
   if (frontier.length) {
-    lines.push('- 当前在攻:' + frontier.slice(0, topFrontier).map((n) => n.claim).join(' / '));
+    lines.push('- 上次在攻:' + frontier.slice(0, topFrontier).map((n) => n.claim).join(' / '));
   }
-  // 2026-06-08: this is background context, NOT a standing instruction. The old imperative line
-  // ("要接着推进就调 continue") made the model auto-continue the reasoning session on EVERY turn —
-  // even for an unrelated request like "清除定时任务" — running a multi-minute round before (or
-  // instead of) doing what the user asked, and (because listActiveSessions is global) pulling a
-  // session started in another channel into the current one. Make it explicitly subordinate to the
-  // user's current request.
+  // 2026-06-08: two failure modes this block must prevent, both observed in production —
+  // (1) HIJACK: an imperative "要接着推进就调 continue" made the model auto-continue on EVERY turn,
+  //     even for an unrelated request ("清除定时任务"), and (listActiveSessions is global) pulled
+  //     another channel's session into this one.
+  // (2) FABRICATION (worse): on "继续" the model sometimes did NOT call deep_explore at all
+  //     (tools=0, ~15s) and just INVENTED a round result from the snapshot numbers above —
+  //     "第2轮 +1证(具体定理)、7开→8开、时间帽" — presenting fake math progress as real.
+  // So: frame the numbers as a stale snapshot, forbid fabricating round results without an actual
+  // call, and keep it subordinate to the user's current request.
   lines.push(
-    '→ 仅为后台进展参考(可能来自其它渠道/会话)。**优先处理用户当前这条消息的实际请求**;' +
-    '只有当用户明确要求"继续/推进这项推理"时,才调 deep_explore(action=continue)(它会阻塞当前回合数分钟);' +
-    '用户问的是别的事(哪怕无关)就不要擅自续跑。',
+    '⚠️ 上面是**已保存的快照,不是这一回合跑出来的**。要推进或查看最新进展,**必须实际调用 deep_explore**' +
+    '(action=continue 真跑一轮、会阻塞数分钟 / action=status 看当前树)。' +
+    '**严禁在没有实际调用 deep_explore 的情况下编造"第N轮 / +N证(某定理) / 时间帽 / x开→y开 / 死胡同"之类的回合结果——那是在欺骗用户。** ' +
+    '另外这可能来自其它渠道/会话:**优先处理用户当前这条消息的实际请求**;只有用户明确要求"继续/推进这项推理"时才调 continue,问别的事就别擅自续跑。',
   );
 
   const out = lines.join('\n');
