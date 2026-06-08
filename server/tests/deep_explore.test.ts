@@ -53,6 +53,16 @@ test('computeFrontier = open 叶节点(有子节点的不算 frontier)', () => {
   assert.deepEqual(ids, ['c']); // 只有 c 是 open 叶(root/a 有子,b 非 open)
 });
 
+test('computeFrontier:子节点全死的 open 节点重回前沿(不再"前沿空但还有 open")', () => {
+  const root = node({ id: 'r', parentId: null, status: 'open' });
+  const a = node({ id: 'a', parentId: 'r', status: 'open' });       // 被分解过
+  const b = node({ id: 'b', parentId: 'a', status: 'dead_end' });   // a 的子,全死
+  const c = node({ id: 'c', parentId: 'a', status: 'refuted' });    // a 的子,全死
+  const f = computeFrontier([root, a, b, c]).map((n) => n.id).sort();
+  // a 的子节点全是 dead/refuted（无 open 子）→ a 重回前沿可再分解/判死;root 有 open 子 a → 不在前沿。
+  assert.deepEqual(f, ['a']);
+});
+
 test('formatOpenIds 列出 open 节点 id', () => {
   const ns = [node({ id: 'x', status: 'open' }), node({ id: 'y', status: 'dead_end' }), node({ id: 'z', status: 'open' })];
   assert.equal(formatOpenIds(ns), 'x, z');

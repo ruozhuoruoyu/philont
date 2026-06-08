@@ -76,6 +76,7 @@ import {
   type ActionLog,
   type SkillStore,
 } from '@agent/memory';
+import { currentSessionId } from './channels/turn_context.js';
 
 const VALID_KINDS: ReadonlySet<string> = new Set([
   'subgoal',
@@ -166,6 +167,31 @@ const ROUND_DEADLINE_MS = (() => {
   }
   return Math.min(requested, ROUND_DEADLINE_CEILING_MS);
 })();
+
+/**
+ * Per-round deadline for an INTERACTIVE turn (a user is waiting on the reply). 2026-06-08: a round
+ * runs to its full wall-clock cap every time (hard problems don't converge early), so with the
+ * 15-min ROUND_DEADLINE_MS each user "continue" blocked ~16 min before replying. Use a shorter cap
+ * when driven by a user turn for responsiveness; background/autonomous rounds keep the full budget
+ * for depth. Default 6 min; env PHILONT_DEEP_EXPLORE_INTERACTIVE_ROUND_DEADLINE_MS (min 30s, clamped
+ * to ≤ ROUND_DEADLINE_MS so "interactive" is never *longer* than the background cap).
+ */
+const INTERACTIVE_ROUND_DEADLINE_MS = (() => {
+  const n = Number(process.env.PHILONT_DEEP_EXPLORE_INTERACTIVE_ROUND_DEADLINE_MS);
+  const requested = Number.isInteger(n) && n >= 30_000 ? n : 360_000;
+  return Math.min(requested, ROUND_DEADLINE_MS);
+})();
+
+/**
+ * Pick the round deadline for the current invocation. currentSessionId() is the turn ALS session:
+ * a `wechat:`/`user:` session means a person is waiting (interactive → short); `system:` (scheduled)
+ * or null (autonomous background loop) means no one is blocked (→ full depth budget).
+ */
+function effectiveRoundDeadlineMs(): number {
+  const sid = currentSessionId();
+  const interactive = !!sid && !sid.startsWith('system:');
+  return interactive ? INTERACTIVE_ROUND_DEADLINE_MS : ROUND_DEADLINE_MS;
+}
 
 /**
  * Value-guided node selection (LATS/rStar style) master switch. On by default;
@@ -298,11 +324,21 @@ export const DEEP_EXPLORE_RESEARCH_ALLOW: ReadonlySet<string> = new Set([
 
 // ── Pure functions (independently testable) ─────────────────────────────────────────────────────
 
-/** frontier = open nodes with no children (the active frontier yet to be attacked). */
+/**
+ * frontier = open nodes with no OPEN child (the active frontier yet to be attacked).
+ *
+ * 2026-06-08: previously this excluded any open node that had *any* child, so an open node whose
+ * children all became dead_end/refuted was neither on the frontier nor closed — the tree showed
+ * "frontier empty but N still open" and the session was wrongly declared stuck while re-attackable
+ * nodes existed. Keying on OPEN children instead lets the frontier bubble back up as subtrees die:
+ * once all of a node's children are closed, the node itself returns to the frontier so the model can
+ * re-decompose it (a different approach) or reason_record it as a dead_end. judgeConvergence only
+ * declares "stuck" when there is genuinely nothing actionable left.
+ */
 export function computeFrontier(nodes: ReasoningNode[]): ReasoningNode[] {
-  const hasChild = new Set<string>();
-  for (const n of nodes) if (n.parentId) hasChild.add(n.parentId);
-  return nodes.filter((n) => n.status === 'open' && !hasChild.has(n.id));
+  const hasOpenChild = new Set<string>();
+  for (const n of nodes) if (n.parentId && n.status === 'open') hasOpenChild.add(n.parentId);
+  return nodes.filter((n) => n.status === 'open' && !hasOpenChild.has(n.id));
 }
 
 /** List of currently valid open node ids (echoed to the LLM when reason_record gets a wrong id, enabling self-correction). */
@@ -1311,13 +1347,14 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
     // 20-min turn hard deadline and leaving orphaned loops).
     const ctrl = new AbortController();
     let timedOut = false;
-    const deadlineTimer = setTimeout(() => { timedOut = true; ctrl.abort(); }, ROUND_DEADLINE_MS);
+    const roundDeadlineMs = effectiveRoundDeadlineMs();
+    const deadlineTimer = setTimeout(() => { timedOut = true; ctrl.abort(); }, roundDeadlineMs);
     // Proactive heads-up partway through the round so a long round does not end "silently":
     // tell the user it is approaching the per-round time cap and will wrap up & save soon.
-    const warnAtMs = Math.round(ROUND_DEADLINE_MS * 0.75);
+    const warnAtMs = Math.round(roundDeadlineMs * 0.75);
     const warnTimer = setTimeout(() => {
       deps.onMilestone?.(
-        `⏳ This round is approaching the ${Math.round(ROUND_DEADLINE_MS / 60_000)}-minute time cap; ` +
+        `⏳ This round is approaching the ${Math.round(roundDeadlineMs / 60_000)}-minute time cap; ` +
         `it will pause and save the tree shortly — reply "continue" to keep going.`,
       );
     }, warnAtMs);
@@ -1373,7 +1410,7 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
     const tail =
       result.error === 'aborted'
         ? timedOut
-          ? `\n(this round hit the ${Math.round(ROUND_DEADLINE_MS / 60_000)}-minute time cap; tree saved — reply "continue" to keep going)`
+          ? `\n(this round hit the ${Math.round(roundDeadlineMs / 60_000)}-minute time cap; tree saved — reply "continue" to keep going)`
           : '\n(this round was aborted; tree saved, you can continue)'
         : '';
     return { success: true, output: `${text}${tail}\nsession id: ${session.id}` };
@@ -1399,13 +1436,14 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
 
     const ctrl = new AbortController();
     let timedOut = false;
-    const deadlineTimer = setTimeout(() => { timedOut = true; ctrl.abort(); }, ROUND_DEADLINE_MS);
+    const roundDeadlineMs = effectiveRoundDeadlineMs();
+    const deadlineTimer = setTimeout(() => { timedOut = true; ctrl.abort(); }, roundDeadlineMs);
     const warnTimer = setTimeout(() => {
       deps.onMilestone?.(
-        `⏳ This round is approaching the ${Math.round(ROUND_DEADLINE_MS / 60_000)}-minute time cap; ` +
+        `⏳ This round is approaching the ${Math.round(roundDeadlineMs / 60_000)}-minute time cap; ` +
         `it will pause and save the tree shortly — reply "continue" to keep going.`,
       );
-    }, Math.round(ROUND_DEADLINE_MS * 0.75));
+    }, Math.round(roundDeadlineMs * 0.75));
     const boundRunner = makeReasoningToolRunner(
       reasoning,
       session.id,
