@@ -5203,6 +5203,17 @@ interface TurnSignalBus {
   inTurnRecords?: InTurnToolRecord[];
 }
 
+/** True when a tool call would advance a deep_explore round (the expensive ~15-min mini-loop), vs read-only status/finalize. */
+function isDeepExploreAdvance(call: { name: string; input: unknown }): boolean {
+  if (call.name !== 'deep_explore') return false;
+  const action = String((call.input as { action?: unknown } | null)?.action ?? '');
+  return action === 'start' || action === 'continue' || action === 'discover';
+}
+const DEEP_EXPLORE_ONE_ROUND_MSG =
+  'Each turn advances deep_explore by at most one round (~15 min) to stay under the turn time limit. ' +
+  'This turn already ran one round and saved the tree. Tell the user the round is done and to reply "continue" ' +
+  'to advance the next round in a fresh turn — do NOT call deep_explore(start/continue/discover) again this turn.';
+
 async function runToolLoop(
   sessionId: string,
   messages: NativeMessage[],
@@ -5235,6 +5246,12 @@ async function runToolLoop(
   // EmptyConclusionGate: accumulated tool call count across the entire runToolLoop.
   // collectedResults already includes tool_results executed before the resume (auth resume case); counted first.
   let totalToolCallsThisTurn = collectedResults.length;
+  // 2026-06-08: at most ONE advancing deep_explore round per turn. A single 15-min round fits under
+  // the 20-min turn hard deadline, but the model would chain a 2nd round in the same turn ("reply
+  // continue" → it calls deep_explore(continue) again) → 2×15min > 20min → TurnDeadlineError ("抱歉
+  // 出错"). Counter is runToolLoop-scoped (= one chat turn); read-only actions (status/finalize)
+  // don't count. Autonomous ticks don't go through runToolLoop, so they're unaffected.
+  let deepExploreAdvancesThisTurn = 0;
 
   // 2026-05-10: in-turn failure pattern detector uses this turn-internal tool call trace.
   // Pushes one entry after each tool execution (success or fail); detectInTurnFailurePattern
@@ -5582,7 +5599,13 @@ async function runToolLoop(
             (sanitized.truncatedTailLen ? ` truncated=${sanitized.truncatedTailLen}` : ''),
         );
       }
-      result = await tools.execute(call.name, sanitized.input);
+      if (isDeepExploreAdvance(call) && deepExploreAdvancesThisTurn >= 1) {
+        console.warn(`[deep-explore] blocked 2nd advance this turn (one round/turn cap)`);
+        result = { success: true, output: DEEP_EXPLORE_ONE_ROUND_MSG, duration: 0 };
+      } else {
+        if (isDeepExploreAdvance(call)) deepExploreAdvancesThisTurn++;
+        result = await tools.execute(call.name, sanitized.input);
+      }
     }
     const outPreview = (result.success ? result.output : result.error) ?? '';
     console.log(
@@ -6655,7 +6678,13 @@ async function runToolLoop(
             `[tool] ${call.name} → input sanitized: path=${sanitized2.path}`,
           );
         }
-        result = await tools.execute(call.name, sanitized2.input);
+        if (isDeepExploreAdvance(call) && deepExploreAdvancesThisTurn >= 1) {
+          console.warn(`[deep-explore] blocked 2nd advance this turn (one round/turn cap)`);
+          result = { success: true, output: DEEP_EXPLORE_ONE_ROUND_MSG, duration: 0 };
+        } else {
+          if (isDeepExploreAdvance(call)) deepExploreAdvancesThisTurn++;
+          result = await tools.execute(call.name, sanitized2.input);
+        }
       }
       onTrace?.({
         kind: 'tool-result', tier: 3,

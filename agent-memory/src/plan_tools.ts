@@ -1366,10 +1366,16 @@ export function createPlanTools(deps: PlanToolsDeps): MemoryTool[] {
       }
       const planCurrent = plans.get(planId);
       if (!planCurrent) {
+        // 2026-06-08: idempotent close. A missing plan id at close time is almost always a
+        // stale/already-closed id, not a real error: scheduled routines re-fire under a fresh
+        // session id each run and churn placeholder plans, so the LLM ends up closing an id it
+        // read from plan.md that was already completed/replaced. Previously this hard-failed the
+        // turn → registered a tool failure → same_root_cause_failures reflection + the schedule
+        // retried the whole routine (the daily check-in ran several times). Treat "plan not found
+        // at close" as a no-op SUCCESS so the bookkeeping mismatch doesn't cascade into retries.
         return {
-          success: false,
-          output: '',
-          error: `plan '${planId}' does not exist`,
+          success: true,
+          output: `plan '${planId}' not found (already closed or a stale id) — treated as closed; no-op.`,
         };
       }
 

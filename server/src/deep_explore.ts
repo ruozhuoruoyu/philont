@@ -451,6 +451,21 @@ function collectComputeLessons(skills: SkillStore | undefined): string[] {
   return lines;
 }
 
+/**
+ * Short PARI/GP syntax primer. Complements the adaptive failure-learning (renderRecentToolFailures
+ * / collectComputeLessons) by heading off the most common up-front mistakes seen in production
+ * (function-vs-block scope, redefining built-in names, unbalanced for(...), forgetting print()).
+ * Kept terse so it doesn't bloat the prompt.
+ */
+const PARI_GP_PRIMER: readonly string[] = [
+  '## pariGp syntax reminders (avoid the common errors)',
+  '- Define a function at top level as `f(x) = (...; expr)`. `my(...)` ONLY declares locals INSIDE a function/block body — `my(a=...)` at top level is a syntax error.',
+  '- Do NOT redefine built-in names as variables: `I` (√-1), `Pi`, `O`, `Euler`, `sigma`, `eta`, `theta`, `zeta` etc. are reserved — `sigma=1.0` errors. Use `s`, `sig`, `t0`, …',
+  '- `for(i=1,N, body)` takes the body as the 3rd comma-arg; balance every `(` `)` and separate statements with `;`. An unbalanced loop gives "unexpected end of file".',
+  '- Anonymous function is `(x) -> expr`. A name used like `g(x)` where `g` is not a function gives "not a function in function call".',
+  '- Always `print(...)` your conclusion — only printed text is returned to you.',
+];
+
 export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode[], lessons: string[] = []): string {
   const lines: string[] = [];
   lines.push('You are a deep-exploreing engine advancing a reasoning tree to crack a root proposition. Record progress into the tree at every step.');
@@ -503,6 +518,8 @@ export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode
 
   for (const l of lessons) lines.push(l);
   for (const l of renderRecentToolFailures(session.id)) lines.push(l);
+  lines.push('');
+  for (const l of PARI_GP_PRIMER) lines.push(l);
 
   lines.push('');
   lines.push('## Your actions (tools)');
@@ -578,6 +595,8 @@ export function buildDiscoverPrompt(
   lines.push('6. Use pariGp/recall tools only for computation and recall; reason_decompose/record write to the tree. **Only use real node ids.**');
   for (const l of lessons) lines.push(l);
   for (const l of renderRecentToolFailures(session.id)) lines.push(l);
+  lines.push('');
+  for (const l of PARI_GP_PRIMER) lines.push(l);
 
   lines.push('');
   lines.push('## Your actions (tools)');
@@ -1223,13 +1242,19 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
         .filter((n) => n.status === 'proved' && n.id !== node.id)
         .map((n) => n.claim);
       const sys = buildSkepticSystemPrompt(node.claim, argument, session.goal, session.assumptions, provedClaims);
+      // 2026-06-08: skeptics get z3Verify + recall but NOT pariGp. Skeptics are reviewers, not
+      // explorers; pariGp is the main round's discovery/compute tool. In practice skeptics burned
+      // their whole 6-iter budget retrying malformed PARI/GP scripts (a failed tool call counts as
+      // a full iteration) instead of refuting — leaving no iters for actual verification. z3Verify
+      // covers rigorous decidable/arithmetic refutation; conceptual review covers the rest.
+      const skepticToolDefs = researchDefs.filter((d) => d.name !== 'pariGp');
       const tally = await runAdversarialVerification({
         llm: miniLoopLLM,
         systemPrompt: sys,
         count: SKEPTIC_COUNT,
-        toolDefs: researchDefs, // read-only research + z3/gp, no reason_*
+        toolDefs: skepticToolDefs, // read-only research + z3, no pariGp, no reason_*
         toolRunner: subTurnToolRunner, // delegate directly; skeptics do not modify the tree
-        whitelist: new Set(researchDefs.map((d) => d.name)),
+        whitelist: new Set(skepticToolDefs.map((d) => d.name)),
         maxIters: SKEPTIC_MAX_ITERS,
         onStatus: deps.onStatus,
         abortSignal,
