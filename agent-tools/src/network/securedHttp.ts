@@ -100,6 +100,32 @@ export function createSecuredHttpTool(
             `If you are just building an endpoint from an id, assemble \`https://host/api/posts/\${id}\` yourself; don't copy the whole markdown link.`,
         };
       }
+      // 2026-06-08: unresolved template-placeholder guard.
+      // Real-world bug: a skill's action_template carries a shell-style placeholder like
+      // `$BASE_URL/api/posts`, but the http tool does NOT expand env / `$VAR` placeholders (only
+      // `{SECRET_ID}` is resolved at injection time). When the authoritative value is missing (e.g.
+      // a `project.<svc>` fact got lost), the model silently substitutes a GUESSED domain
+      // (mycox.app / api.mycox.app instead of mycox.ai) → a string of `fetch failed` against
+      // hallucinated hosts + failure-ledger noise. Fail LOUD instead: reject any leftover
+      // `$NAME` / `${NAME}` placeholder so the misconfig surfaces immediately.
+      // Scope: only `$`-style env-var placeholders (uppercase `$BASE_URL`, or `${...}`). Does NOT
+      // touch `{SECRET_ID}` (curly, no `$` — resolved later) or OData params (`$filter`/`$top` —
+      // lowercase), which are legitimate.
+      const placeholderLeak = /\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Z][A-Z0-9_]+/;
+      const phMatch = placeholderLeak.exec(url);
+      if (phMatch) {
+        return {
+          success: false,
+          output: '',
+          error:
+            `http tool: URL still contains an unresolved placeholder "${phMatch[0]}" — the http tool does NOT expand ` +
+            `env / $VAR placeholders (only {SECRET_ID} is resolved). Do not guess the value.\n` +
+            `Fix: substitute the REAL value before calling http (e.g. get the service base URL from a fact / memory, ` +
+            `or ask the user), then pass the full concrete URL like "https://host/api/posts". ` +
+            `If the value is a secret, use the {SECRET_ID} form and configure it in the secret store.`,
+        };
+      }
+
       const method = (params.method as string) || 'GET';
       // 2026-05-17 Phase 13.5: method character-set validation.
       // Real-world bug: LLM provider template fragments (DSML / qwen tool-call templates) sometimes

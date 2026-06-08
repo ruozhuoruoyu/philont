@@ -57,6 +57,26 @@ test('body 是 string → 原样发送,不动 Content-Type', async () => {
   });
 });
 
+test('unresolved $VAR placeholder → rejected before fetch (no guessing)', async () => {
+  const tool = makeTool();
+  for (const url of ['https://$BASE_URL/api/posts', 'https://h/${HOST}/x', 'https://$API_URL/v1']) {
+    const r = await tool.execute({ url, method: 'GET' });
+    assert.equal(r.success, false, `should reject ${url}`);
+    assert.match(r.error ?? '', /unresolved placeholder/);
+  }
+});
+
+test('legitimate $ / {SECRET_ID} usage passes the placeholder gate', async () => {
+  const tool = makeTool();
+  // OData $filter/$top (lowercase) and a clean URL must NOT be rejected as placeholders.
+  for (const url of ['https://api.example.com/api?$filter=x&$top=5', 'https://api.mycox.ai/api/posts']) {
+    await withMockFetch({ status: 200, body: '{"ok":true}' }, async () => {
+      const r = await tool.execute({ url, method: 'GET' });
+      assert.equal(r.success, true, `should allow ${url}`);
+    });
+  }
+});
+
 test('body 是 object → 自动 JSON.stringify + 补 Content-Type', async () => {
   const tool = makeTool();
   await withMockFetch({ status: 200, body: '{"ok":true}' }, async (cap) => {
