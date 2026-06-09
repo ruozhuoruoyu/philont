@@ -218,6 +218,23 @@ test('group: 排序按 count DESC', () => {
   assert.equal(groups[1].count, 1);
 });
 
+test('group: 机制拒绝 rejected_by_* 被排除(回归:旧正则写成 [mechanism 漏匹配 → 噪声漏进 same_root_cause)', () => {
+  const groups = groupFailures([
+    fail('deep_explore', 'rejected_by_plan_protocol_gate'),
+    fail('deep_explore', 'rejected_by_plan_protocol_gate'),
+    fail('deep_explore', 'rejected_by_plan_protocol_gate'),
+    fail('shell', 'rejected_by_autonomous_blacklist'),
+    fail('plan_update_step', 'rejected_by_research_before_retry'),
+    fail('x', 'rejected_by_in_turn_reflection'),
+    fail('y', 'rejected_by_ask_guard'),
+    fail('shell', 'command not found: rg'), // a REAL failure must still count
+  ]);
+  // every rejected_by_* mechanism rejection is excluded → only the real shell failure groups remain
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].signature, 'shell:cmd-not-found:rg');
+  assert.equal(groups[0].count, 1);
+});
+
 test('group: latestTs 取该签命中的最大 timestamp', () => {
   const groups = groupFailures([
     fail('shell', 'rg: command not found', 100),

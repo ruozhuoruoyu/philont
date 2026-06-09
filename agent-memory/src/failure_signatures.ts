@@ -135,8 +135,14 @@ export function extractFailureSignature(
  * Both are filtered out of groupFailures (and therefore countSameRootCauseFailures) below.
  */
 const EXCLUDED_FROM_ROOT_CAUSE = new Set<string>(['pariGp', 'z3Verify']);
-const MECHANISM_REJECTION_RE =
-  /:other:\[(plan_protocol_gate|in_turn_tool_block|autonomous_blacklist|research[_-]?before[_-]?retry)\b/i;
+// Mechanism / deliberate-rejection failures are recorded with result='rejected_by_<mechanism>'
+// (plan_protocol_gate / autonomous_blacklist / research_before_retry / in_turn_reflection / ask_guard / …),
+// which extractFailureSignature turns into `<tool>:other:rejected_by_<mechanism>`. These are on-purpose
+// protocol stops, not the LLM hitting a task wall, so they must NOT count toward same_root_cause_failures.
+// BUGFIX 2026-06-09: the previous pattern matched `:other:[<mechanism>` (a bracket form the real
+// `rejected_by_` marker never produces) and named `in_turn_tool_block` (real marker is `in_turn_reflection`)
+// — so it never matched, and these rejections leaked into the trigger as noise. Match the real marker.
+const MECHANISM_REJECTION_RE = /:other:rejected_by_/i;
 
 export interface FailureCounted {
   signature: string;
