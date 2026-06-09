@@ -1129,6 +1129,7 @@ export async function scoreFrontierValues(opts: {
       sys,
       [{ role: 'user', content: 'Score the subgoals above and tag each technique; output only the JSON array.' }],
       [],
+      { signal: opts.abortSignal },
     );
     const text = resp.type === 'text' ? resp.content : '';
     return { assessments: parseAssessments(text, validIds), tokensSpent: resp.tokensUsed ?? 0 };
@@ -1364,12 +1365,21 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
         output: `This reasoning session has used ${session.budgetSpent} tokens, hitting the budget cap (${SESSION_TOKEN_BUDGET}); paused. Continue later with a fresh angle, or treat it as stuck.`,
       };
     }
+    // Wall-clock budget for the WHOLE round (scoring + mini-loop). The timer starts HERE, before the
+    // value-guided scoring, so the round's total wall-clock stays under the cap. Previously the timer
+    // only covered the mini-loop, so a large-frontier scoring call (one LLM pass over all open nodes)
+    // ran OUTSIDE the budget and overran the "6-minute" cap by ~60–80s. The scoring call is now passed
+    // ctrl.signal so the deadline can also cut it short.
+    const ctrl = new AbortController();
+    let timedOut = false;
+    const roundDeadlineMs = effectiveRoundDeadlineMs();
+    const deadlineTimer = setTimeout(() => { timedOut = true; ctrl.abort(); }, roundDeadlineMs);
+
     // Value-guided node selection (LATS / rStar style): an independent aux-LLM scores
     // frontier nodes on "value × tractability", persisted to nodes; at render time nodes are
     // ranked by UCB (value exploit + visits exploration) with the top one recommended.
     // VALUE_GUIDED=0 disables (reverts to depth/creation order + "LLM picks for itself").
-    // frontier < 2 is not worth scoring. Single lightweight call, runs before the wall-clock
-    // timer (the timer only covers the heavier mini-loop); failure gracefully degrades to unscored.
+    // frontier < 2 is not worth scoring; the call is abortable so the deadline can cut it.
     const before0 = reasoning.getNodes(session.id);
     if (VALUE_GUIDED) {
       const frontier0 = computeFrontier(before0);
@@ -1379,6 +1389,7 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
           goal: session.goal,
           assumptions: session.assumptions,
           frontier: frontier0,
+          abortSignal: ctrl.signal,
         });
         if (assessments.size) {
           reasoning.setNodeValues(
@@ -1403,12 +1414,6 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
           `committing to the tree wastes the entire time budget and will be cut short.`
         : 'Continue advancing the current reasoning tree; prefer the most promising open node on the frontier.';
 
-    // Wall-clock budget: abort at deadline; mini-loop stops gracefully (avoids hitting the
-    // 20-min turn hard deadline and leaving orphaned loops).
-    const ctrl = new AbortController();
-    let timedOut = false;
-    const roundDeadlineMs = effectiveRoundDeadlineMs();
-    const deadlineTimer = setTimeout(() => { timedOut = true; ctrl.abort(); }, roundDeadlineMs);
     // Proactive heads-up partway through the round so a long round does not end "silently":
     // tell the user it is approaching the per-round time cap and will wrap up & save soon.
     const warnAtMs = Math.round(roundDeadlineMs * 0.75);

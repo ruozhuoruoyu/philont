@@ -483,6 +483,27 @@ test('scoreFrontierValues:解析评估器输出(value+technique);abort/空 front
   assert.equal(aborted.tokensSpent, 0);
 });
 
+test('scoreFrontierValues 把 abortSignal 转发给 LLM 调用(6min 帽可中断前沿打分)', async () => {
+  // The frontier-scoring call now runs inside the round budget and must be cancellable, so the
+  // deadline can cut a slow scoring pass (large frontier) instead of overrunning the cap by ~60-80s.
+  let received: { signal?: AbortSignal } | undefined;
+  const recordingLLM: MiniLoopLLMClient = {
+    async send(_sys, _msgs, _tools, opts) {
+      received = opts;
+      return { type: 'text', content: '[]', tokensUsed: 0 };
+    },
+  };
+  const ctrl = new AbortController();
+  await scoreFrontierValues({
+    llm: recordingLLM,
+    goal: 'G',
+    assumptions: [],
+    frontier: [node({ id: 'aaaaaaaa-1111' }), node({ id: 'bbbbbbbb-2222' })],
+    abortSignal: ctrl.signal,
+  });
+  assert.equal(received?.signal, ctrl.signal);
+});
+
 // ── 实验数学 explore 模式(①)──────────────────────────────────────────────────
 
 test('buildDiscoverPrompt:含探索主题/挂载点 rootId/pariGp 纪律/conjecture 指令', () => {
