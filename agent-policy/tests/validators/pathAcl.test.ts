@@ -93,3 +93,66 @@ describe('PathAclValidator', () => {
     assert.equal(r.action, 'deny');
   });
 });
+
+// Cross-platform glob matching. The `platform` config overrides OS detection so the Windows branch
+// (backslash separators + case-insensitive) is exercised on any host — this regression-tests the bug
+// where `**/.ssh/**` / `**/.aws/credentials` style denies silently failed on Windows backslash paths.
+describe('PathAclValidator — OS-aware matching', () => {
+  describe('Windows (platform=win32)', () => {
+    const v = createPathAclValidator({ platform: 'win32' });
+
+    it('REGRESSION: blocks backslash .aws\\credentials (was silently allowed)', async () => {
+      const r = await v(mkCtx('readFile', { path: 'C:\\Users\\ye\\.aws\\credentials' }));
+      assert.equal(r.action, 'deny');
+    });
+
+    it('blocks backslash .ssh\\config (internal-separator pattern)', async () => {
+      const r = await v(mkCtx('readFile', { path: 'C:\\Users\\ye\\.ssh\\config' }));
+      assert.equal(r.action, 'deny');
+    });
+
+    it('blocks backslash .docker\\config.json', async () => {
+      const r = await v(mkCtx('readFile', { path: 'C:\\Users\\ye\\.docker\\config.json' }));
+      assert.equal(r.action, 'deny');
+    });
+
+    it('case-insensitive: blocks .SSH (uppercase) on Windows', async () => {
+      const r = await v(mkCtx('readFile', { path: 'C:\\Users\\ye\\.SSH\\config' }));
+      assert.equal(r.action, 'deny');
+    });
+
+    it('blocks an id_rsa filename on a backslash path', async () => {
+      const r = await v(mkCtx('readFile', { path: 'C:\\Users\\ye\\keys\\id_rsa' }));
+      assert.equal(r.action, 'deny');
+    });
+
+    it('does not over-block a normal backslash path', async () => {
+      const r = await v(mkCtx('readFile', { path: 'C:\\Users\\ye\\proj\\notes.md' }));
+      assert.equal(r.action, 'pass');
+    });
+  });
+
+  describe('POSIX (platform=linux)', () => {
+    const v = createPathAclValidator({ platform: 'linux' });
+
+    it('blocks .ssh/config', async () => {
+      const r = await v(mkCtx('readFile', { path: '/home/ye/.ssh/config' }));
+      assert.equal(r.action, 'deny');
+    });
+
+    it('blocks .aws/credentials', async () => {
+      const r = await v(mkCtx('readFile', { path: '/home/ye/.aws/credentials' }));
+      assert.equal(r.action, 'deny');
+    });
+
+    it('is case-SENSITIVE: .SSH (uppercase) is NOT a match on POSIX', async () => {
+      const r = await v(mkCtx('readFile', { path: '/home/ye/.SSH/config' }));
+      assert.equal(r.action, 'pass');
+    });
+
+    it('passes a normal path', async () => {
+      const r = await v(mkCtx('readFile', { path: '/home/ye/proj/notes.md' }));
+      assert.equal(r.action, 'pass');
+    });
+  });
+});

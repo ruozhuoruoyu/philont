@@ -30,6 +30,8 @@ export interface PathAclConfig {
   toolNames?: Set<string>;
   /** Param field names to check */
   pathFields?: string[];
+  /** Override OS detection for glob matching (testing / cross-platform). Default: process.platform. */
+  platform?: NodeJS.Platform;
 }
 
 /** Default sensitive-path denyList (read and write both denied) */
@@ -71,20 +73,19 @@ const DEFAULT_PATH_FIELDS = ['path', 'from', 'to', 'cwd'];
 // Windows we normalise backslashes to forward slashes on both pattern and subject and compile the regex
 // case-insensitively. Without this, denylist patterns with internal separators (the .ssh and
 // .aws/credentials style entries) silently fail to match the backslash paths that path.resolve produces
-// on Windows.
-const IS_WINDOWS = process.platform === 'win32';
+// on Windows. `isWindows` is threaded from config (default process.platform) so it is testable off-Windows.
 
 /** Normalise a path/pattern for glob matching: forward slashes on Windows, unchanged on POSIX. */
-function toMatchForm(s: string): string {
-  return IS_WINDOWS ? s.replace(/\\/g, '/') : s;
+function toMatchForm(s: string, isWindows: boolean): string {
+  return isWindows ? s.replace(/\\/g, '/') : s;
 }
 
-function globToRegex(pattern: string): RegExp {
-  // Expand ~ to homedir, then normalise separators (Windows) so `/`-style patterns match.
+function globToRegex(pattern: string, isWindows: boolean): RegExp {
+  // Expand ~ to homedir, then normalise separators (Windows) so forward-slash patterns match.
   const expanded = pattern.startsWith('~')
     ? homedir() + pattern.slice(1)
     : pattern;
-  const src = toMatchForm(expanded);
+  const src = toMatchForm(expanded, isWindows);
 
   let regex = '';
   let i = 0;
@@ -108,7 +109,7 @@ function globToRegex(pattern: string): RegExp {
     i++;
   }
   // Windows file systems are case-insensitive → match patterns case-insensitively there.
-  return new RegExp('^' + regex + '$', IS_WINDOWS ? 'i' : '');
+  return new RegExp('^' + regex + '$', isWindows ? 'i' : '');
 }
 
 /** Normalise path: expand ~, convert to absolute, eliminate .. */
@@ -133,11 +134,11 @@ function extractPaths(params: Record<string, unknown>, fields: string[]): string
 }
 
 /** Check whether normalizedPath matches any of the given glob patterns */
-function matchesAny(normalizedPath: string, patterns: string[] | undefined): boolean {
+function matchesAny(normalizedPath: string, patterns: string[] | undefined, isWindows: boolean): boolean {
   if (!patterns || patterns.length === 0) return false;
-  const subject = toMatchForm(normalizedPath);
+  const subject = toMatchForm(normalizedPath, isWindows);
   for (const pat of patterns) {
-    const rx = globToRegex(pat);
+    const rx = globToRegex(pat, isWindows);
     if (rx.test(subject)) return true;
   }
   return false;
@@ -160,6 +161,7 @@ export function createPathAclValidator(config: PathAclConfig = {}): Validator {
   const denyList = config.denyList ?? DEFAULT_SENSITIVE_PATHS;
   const workspaceOnly = config.workspaceOnly ?? false;
   const workspaceDir = config.workspaceDir;
+  const isWindows = (config.platform ?? process.platform) === 'win32';
 
   return (ctx: ValidatorContext) => {
     // Skip tools that are not file-related
@@ -175,10 +177,10 @@ export function createPathAclValidator(config: PathAclConfig = {}): Validator {
       const norm = normalizePath(raw);
 
       // 1. allowList takes priority
-      if (matchesAny(norm, allowList)) continue;
+      if (matchesAny(norm, allowList, isWindows)) continue;
 
       // 2. denyList reject
-      if (matchesAny(norm, denyList)) {
+      if (matchesAny(norm, denyList, isWindows)) {
         return deny('PATH_ACL_DENY', `Path denied by ACL: ${norm}`);
       }
 
