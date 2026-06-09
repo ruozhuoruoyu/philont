@@ -624,3 +624,39 @@ test('finalize:无会话 → 友好提示而非报错', async () => {
   assert.match(r.output, /No deep-explore session/);
   mem.close();
 });
+
+test('withNoProgressStop: 慢迭代按时间早停(次数没到10也停)—— 修复 6min 空转', async () => {
+  // The 6min-waste bug: max-effort iterations are slow (~72s), so only ~5 fit before the round cap;
+  // the call-count cap (10) never fires and the round burns the whole budget with 0 tree commits.
+  // The time-aware stop catches it: no commit for > noProgressTimeoutMs → abort, regardless of count.
+  let t = 0;
+  const clock = () => t;
+  let aborts = 0;
+  const slowPariGp = async () => ({ ok: true, output: 'computed' }); // succeeds but is NOT a tree commit
+  const w = withNoProgressStop(slowPariGp, () => { aborts++; }, { noProgressTimeoutMs: 180_000, now: clock });
+
+  await w.runner('pariGp', {});                       // call 1 @ t=0   (count<2 guard → no stop)
+  assert.equal(w.stalled.value, false);
+  t = 72_000; await w.runner('pariGp', {});           // call 2 @ 72s   (elapsed 72s < 180s)
+  assert.equal(w.stalled.value, false);
+  t = 200_000; await w.runner('pariGp', {});          // call 3 @ 200s  (elapsed > 180s, count 3 → STOP)
+  assert.equal(w.stalled.value, true);
+  assert.equal(aborts, 1);
+});
+
+test('withNoProgressStop: 一次 reason 提交会重置计时,真干活的轮不被时间早停', async () => {
+  let t = 0;
+  const clock = () => t;
+  let aborts = 0;
+  const w = withNoProgressStop(async () => ({ ok: true, output: 'ok' }), () => { aborts++; }, {
+    noProgressTimeoutMs: 180_000,
+    now: clock,
+  });
+  await w.runner('pariGp', {});                        // t=0
+  t = 72_000; await w.runner('pariGp', {});            // 72s, no commit
+  t = 100_000; await w.runner('reason_record', {});    // commit → resets timer to 100s
+  t = 200_000; await w.runner('pariGp', {});           // 100s since commit
+  t = 260_000; await w.runner('pariGp', {});           // 160s since commit < 180s → no stop
+  assert.equal(w.stalled.value, false);
+  assert.equal(aborts, 0);
+});

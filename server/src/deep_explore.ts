@@ -216,16 +216,32 @@ const NO_PROGRESS_CAP = (() => {
 export function withNoProgressStop(
   base: (name: string, input: Record<string, unknown>) => Promise<MiniLoopToolRunResult>,
   abort: () => void,
+  opts: { noProgressTimeoutMs?: number; now?: () => number } = {},
 ): { runner: (name: string, input: Record<string, unknown>) => Promise<MiniLoopToolRunResult>; stalled: { value: boolean } } {
+  const now = opts.now ?? Date.now;
+  const timeoutMs = opts.noProgressTimeoutMs;
   let callsSinceProgress = 0;
+  let lastProgressTs = now(); // round start; reset on every tree commit
   const stalled = { value: false };
   const runner = async (name: string, input: Record<string, unknown>) => {
     const r = await base(name, input);
     callsSinceProgress++;
-    if (r.ok && (name === 'reason_decompose' || name === 'reason_record')) callsSinceProgress = 0;
-    if (callsSinceProgress >= NO_PROGRESS_CAP && !stalled.value) {
+    if (r.ok && (name === 'reason_decompose' || name === 'reason_record')) {
+      callsSinceProgress = 0;
+      lastProgressTs = now();
+    }
+    // Time-aware stop: a round that has not committed ANYTHING to the tree for too long is spinning
+    // (e.g. all-pariGp, never decomposes). The call-count cap above misses this when iterations are
+    // slow (max reasoning effort → only a few calls fit before the wall-clock cap), so also stop when
+    // too much time has elapsed with no commit. `callsSinceProgress >= 2` avoids killing on one slow step.
+    const stalledByTime =
+      timeoutMs != null && callsSinceProgress >= 2 && now() - lastProgressTs > timeoutMs;
+    if ((callsSinceProgress >= NO_PROGRESS_CAP || stalledByTime) && !stalled.value) {
       stalled.value = true;
-      console.warn(`[deep-explore] no-progress early stop: ${callsSinceProgress} tool calls without a tree commit`);
+      console.warn(
+        `[deep-explore] no-progress early stop: ${callsSinceProgress} calls / ` +
+          `${Math.round((now() - lastProgressTs) / 1000)}s without a tree commit`,
+      );
       abort();
     }
     return r;
@@ -1381,7 +1397,10 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
     const systemPrompt = renderTreePrompt(session, before, collectComputeLessons(skills));
     const userMessage =
       before.length <= 1
-        ? session.goal
+        ? `${session.goal}\n\n[FRESH session — only the root node exists.] Your FIRST action MUST be ` +
+          `reason_decompose, splitting the root proposition into 2–5 concrete subgoals/lemmas. Do NOT run ` +
+          `pariGp or any computation before the root is decomposed — a round that only computes without ` +
+          `committing to the tree wastes the entire time budget and will be cut short.`
         : 'Continue advancing the current reasoning tree; prefer the most promising open node on the frontier.';
 
     // Wall-clock budget: abort at deadline; mini-loop stops gracefully (avoids hitting the
@@ -1409,6 +1428,8 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
         actions,
       ),
       () => ctrl.abort(),
+      // Stop a round that has made NO tree commit for half the round budget (the slow all-pariGp spin).
+      { noProgressTimeoutMs: Math.round(roundDeadlineMs * 0.5) },
     );
     let result;
     try {
@@ -1499,6 +1520,8 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
         actions,
       ),
       () => ctrl.abort(),
+      // Stop a round that has made NO tree commit for half the round budget (the slow all-pariGp spin).
+      { noProgressTimeoutMs: Math.round(roundDeadlineMs * 0.5) },
     );
     let result;
     try {
