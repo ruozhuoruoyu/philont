@@ -6,8 +6,39 @@
 [![Runtime: Node ≥ 20](https://img.shields.io/badge/runtime-Node%20%E2%89%A5%2020-green.svg)](#quick-start)
 [![Status: developer preview](https://img.shields.io/badge/status-developer%20preview-orange.svg)](#status)
 [![Bring your own model](https://img.shields.io/badge/LLM-bring%20your%20own-7c3aed.svg)](#configuration)
+[![~100× cheaper](https://img.shields.io/badge/cost-~100%C3%97%20cheaper%20per%20token-16a34a.svg)](#why-a-cheap-model-is-enough)
 
-philont is a self-hostable AI agent that has personality, drives its own learning, and reasons through hard problems step by step. It is not a chatbot wrapper or an automation framework. It is a **being** — an agent with an independent character, intrinsic curiosity, and a compulsion to understand before it acts. It grows with every session, teaches itself from failure, and never pretends to have succeeded when it hasn't.
+philont is a self-hostable AI agent that has personality, drives its own learning, and reasons through hard problems step by step. Most open-source agents — OpenClaw, Hermes, and the rest — are **task runners**: you hand them a job, they execute it, they stop. philont is built to be something else: a **being** — an agent with an independent character, intrinsic curiosity, and a compulsion to understand before it acts. It grows with every session, teaches itself from failure, and never pretends to have succeeded when it hasn't.
+
+And because its intelligence lives in the **architecture, not the model**, philont runs sophisticated, fully autonomous work on a model that costs a fraction of the frontier — typically **~100× cheaper per token** than agents that depend on a top-tier model. See [Why a cheap model is enough](#why-a-cheap-model-is-enough).
+
+---
+
+## Why philont is different from OpenClaw and Hermes
+
+The open-source agent field competes on cost-per-token, tool count, and integration breadth. philont competes on a different axis: **what the agent actually is**, and **what it costs to run it well**.
+
+| | OpenClaw | Hermes | **philont** |
+|---|:---:|:---:|:---:|
+| Core model | extrinsic task runner | task runner + learning loop | **autonomous being with intrinsic drives** |
+| Acts on its own initiative | ❌ | ⚠️ scheduled cron | ✅ curiosity · pursuit · commitment drives |
+| Self-learning from failure | ❌ | ✅ | ✅ **+ honesty gates against pretended success** |
+| Step-by-step deep reasoning | ❌ | ❌ | ✅ `deep_explore` conjecture loop |
+| Built-in permission / audit layer | command allowlist | command approval | ✅ 3×4 capability matrix · validator chain · SHA-256 audit log |
+| Runs complex tasks on a **cheap** model | needs a strong model | needs a strong model | ✅ **DeepSeek V4 Flash — ~100× cheaper** |
+| BYOK / model freedom | ✅ | ✅ | ✅ |
+| Persistent cross-session memory | ✅ | ✅ | ✅ 5-layer (timeline · actions · FTS notes · facts · skills) |
+| Lives across channels (WeChat / Telegram / …) | ✅ | ✅ | ✅ |
+
+OpenClaw and Hermes are excellent at *doing what you ask*. philont is built to *want things, reason about them, and stay honest* — and to do it on hardware-store-cheap inference.
+
+### Why a cheap model is enough
+
+Other agents push complex reasoning, planning, and memory **into the prompt**, so they need a frontier model (Claude Opus, GPT-class) to hold it all together every turn — and they pay frontier prices for every token.
+
+philont moves that work **into the runtime**. A kernel-style separation puts the heavy lifting in the **policy layer** — multi-step deep-reasoning loops, 5-layer persistent memory, self-learning, and honesty gates — while the model is only ever asked to take the *next* step. The intelligence comes from the architecture, not from the size of the model behind the API.
+
+The result: tasks that would otherwise demand a frontier model run comfortably on **DeepSeek V4 Flash** — roughly **100× cheaper per token**. Where token-efficiency-focused agents shave ~1.5–3× off the bill by trimming the harness, philont changes the model class entirely. And it's still BYOK: point it at Claude or GPT when you want maximum ceiling, drop to Flash when you want maximum economy.
 
 ---
 
@@ -27,12 +58,13 @@ philont is a self-hostable AI agent that has personality, drives its own learnin
 | | |
 |---|---|
 | **Honesty guardrails** | Gates catch pretended success, fabricated numbers, and half-finished hand-offs — and force an honest regeneration. You can't learn from a failure you pretended didn't happen. |
-| **Permission layer** | Every tool call passes through a 3×4 capability matrix (read/write/execute × local/network/system/self), a validator chain (path ACLs, SSRF, dangerous-command and secret-leak detection), and a SHA-256-chained audit log. Nothing runs without authorisation. |
+| **Permission layer** | Every tool call is checked against a 3×4 capability matrix (read/write/execute × local/network/system/self): external writes and command execution require explicit per-capability approval, and a SHA-256-chained audit log records everything. A validator chain adds a sensitive-path denylist (blocks tool reads/writes to `~/.ssh`, `.env`, `/etc/shadow`, …) and hard-denies catastrophic shell commands (`rm -rf /`, `mkfs`, `dd`, fork bombs, secret-exfil pipes). Boundary-crossing actions are gated and audited — see **[SECURITY-DESIGN.md](SECURITY-DESIGN.md)** for exactly what is and isn't enforced today (SSRF allowlisting and OS sandboxing are on the roadmap, not yet shipped). |
+| **Conscience gate (optional)** | Off by default. When enabled, every outbound message to a person (WeChat/Telegram) is first judged by one LLM call against a short no-harm constitution — defamation, doxxing, disinformation, harm-enabling instructions — before it's sent. Fail-open by design: a judge error never blocks a reply. |
 | **5-layer persistent memory** | SQLite-backed raw timeline, action log, full-text-search notes (FTS5), structured facts, and learned skills — all cross-session. The agent remembers. |
 | **Idle-time autonomy** | When you're not talking to it, philont runs a budgeted autonomous loop: proactive research, gap-filling, self-review — under a hard daily token ceiling. |
 | **MCP bridge & plugins** | Mount any MCP server (browser automation, code execution, external APIs) or load sandboxed third-party plugins. Playwright MCP gives it a full browser. |
 | **Lives where you are** | One server process drives a Lit Web UI, WeChat, Telegram, and a headless CLI. |
-| **Mechanism, not policy** | Inspired by OS kernel design: philont's core defines *how* tools execute and how policy is enforced — not *which* tools exist or what they do. This clean separation means complex capabilities (self-learning, deep reasoning, memory) live entirely in the policy/userspace layer, not in the model. A cost-efficient model like DeepSeek V4 Flash can handle sophisticated tasks that would otherwise require a much more expensive frontier model — the intelligence comes from the architecture, not the API bill. |
+| **Mechanism, not policy** | Inspired by OS kernel design: philont's core defines *how* tools execute and how policy is enforced — not *which* tools exist or what they do. Complex capabilities (self-learning, deep reasoning, memory) live entirely in the policy/userspace layer, not in the model. This is what lets a cost-efficient model like DeepSeek V4 Flash handle work that would otherwise demand a frontier model — see [Why a cheap model is enough](#why-a-cheap-model-is-enough). |
 | **Bring your own model** | Any Anthropic- or OpenAI-compatible endpoint: Claude, DeepSeek, GLM, Kimi, MiniMax, Gemini, or your own. Switch with a config change — no code edits, no lock-in. |
 
 ---
@@ -81,6 +113,7 @@ Everything is configured via environment variables (`.env` in the repo root, or 
 | `PHILONT_MCP_BROWSER` | off | Browser automation via Playwright MCP. |
 | `PHILONT_DEEP_EXPLORE` | on | Multi-step deep reasoning tool. |
 | `PHILONT_AUTONOMOUS` / `PHILONT_AUTONOMOUS_DAILY_TOKENS` | on / `20000` | Idle-time autonomous loop and its daily token ceiling. |
+| `PHILONT_CONSCIENCE_GATE` | off | LLM safety check on each outbound human-facing message (fail-open; adds one LLM call/reply when on). |
 | `MEMORY_DB_PATH` | `~/.philont/memory/memory.sqlite` | SQLite memory database path. |
 | `PHILONT_PORT` | `20266` | Server port. |
 | `PHILONT_PROXY` / `HTTPS_PROXY` | — | Global outbound proxy for all fetch traffic. |
