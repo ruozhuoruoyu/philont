@@ -47,6 +47,23 @@ export function extractFailureSignature(
   const text = (resultText ?? '').toString();
   const lower = text.toLowerCase();
 
+  // 0. Tool-specific taxonomies take precedence over the generic patterns below — otherwise a
+  //    pariGp/z3 error whose text happens to contain a 3-digit number / "timeout" / etc. gets
+  //    mislabelled (observed: `pariGp:http-500`). Classify by the compute tool first so its errors
+  //    stay in the `pariGp:gp-*` / `z3Verify:z3-error` families.
+  if (tool === 'pariGp') {
+    if (/syntax error/.test(lower)) return `${tool}:gp-syntax`;
+    if (/incorrect type/.test(lower)) return `${tool}:gp-type`;
+    if (/variable name expected/.test(lower)) return `${tool}:gp-varname`;
+    if (/too few arguments|too many arguments/.test(lower)) return `${tool}:gp-args`;
+    if (/not a function in function call/.test(lower)) return `${tool}:gp-not-a-function`;
+    if (/computation timed out|process killed/.test(lower)) return `${tool}:gp-timeout`;
+    return `${tool}:gp-other`;
+  }
+  if (tool === 'z3Verify') {
+    return `${tool}:z3-error`;
+  }
+
   // 1. shell command not found (common enough to warrant dedicated extraction)
   const cmdNotFound =
     lower.match(/command not found:?\s*(\S+)/) ??
@@ -91,26 +108,7 @@ export function extractFailureSignature(
     return `${tool}:http-${httpStatus[1]}`;
   }
 
-  // 8. PARI/GP exploratory-compute errors (2026-06-07): all of these otherwise fall into the
-  //    useless `other:<first 30 chars>` bucket (the GP error text varies per expression), so
-  //    repeated same-kind errors never group. Map the GP stderr to sharp classes so the
-  //    learning pipeline can cluster recurring kinds. Pure deterministic regex on lowered text.
-  if (tool === 'pariGp') {
-    if (/syntax error/.test(lower)) return `${tool}:gp-syntax`;
-    if (/incorrect type/.test(lower)) return `${tool}:gp-type`;
-    if (/variable name expected/.test(lower)) return `${tool}:gp-varname`;
-    if (/too few arguments|too many arguments/.test(lower)) return `${tool}:gp-args`;
-    if (/not a function in function call/.test(lower)) return `${tool}:gp-not-a-function`;
-    if (/computation timed out|process killed/.test(lower)) return `${tool}:gp-timeout`;
-    return `${tool}:gp-other`;
-  }
-
-  // 8b. z3 verifier errors (2026-06-07): minimal single-class mapping, same rationale as PARI/GP.
-  if (tool === 'z3Verify') {
-    return `${tool}:z3-error`;
-  }
-
-  // 9. Fallback: take first 30 chars (strip ⚠ marker + excess whitespace)
+  // 8. Fallback: take first 30 chars (strip ⚠ marker + excess whitespace)
   const stripped = text
     .replace(/^[⚠✓\s]+/, '')
     .replace(/^TOOL\s*FAILED:?\s*/i, '')

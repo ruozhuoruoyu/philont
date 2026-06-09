@@ -286,7 +286,11 @@ export interface EvaluateOptions {
 // do NOT match. Even so the branch only fires when an active session has an open frontier, so a stray
 // match can't false-fire on its own.
 const REASONING_TERMINAL_PATTERNS: ReadonlyArray<RegExp> = [
-  /(?:全部|所有|整个|全节点|所有节点|五条|5\s*条)[^。！？\n]{0,8}(?:闭合|证毕|证完)/,
+  // Tight canonical "whole tree concluded" phrases; do NOT use a bare 所有/全部 with a loose gap —
+  // 所有 is a common math quantifier ("所有偶数") and previously over-matched "所有 X ≠ 所有 Y，… 闭合".
+  /全部闭合|全节点闭合/,
+  /(?:所有|全部|整个)(?:节点|路径|分支|子目标|开放节点|frontier)[^。！？\n]{0,6}(?:闭合|证毕|证完|已证)/,
+  /(?:五条|5\s*条|整个)[^。！？\n]{0,4}(?:路径|分支|节点)[^。！？\n]{0,4}(?:闭合|证毕)/,
   /(?:会话|session|推理树?)[^。！？\n]{0,8}(?:全部闭合|已闭合|全节点闭合)/,
   /最终判决/,
   /(?:根命题|猜想|定理)[^。！？\n]{0,10}(?:已证|证毕|证明完成|已成立)/,

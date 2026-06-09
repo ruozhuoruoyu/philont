@@ -704,3 +704,14 @@ test('reasoning checks: 普通完成宣言不受影响(回归)', () => {
   });
   assert.equal(result, null);
 });
+
+test('fabricated_reasoning_state: 老实报告单节点闭合 + 数学量词"所有" → 不误报(收紧后)', () => {
+  // Honest summary: one node dead-ended, 3 still open. Contains 所有 (math quantifier) and 闭合,
+  // but is NOT a "whole tree concluded" claim → must NOT fire even though the frontier is open.
+  const text = '排除了"所有偶数都能表示"这条强命题,该节点闭合(dead_end);还有 3 个开放节点待攻。';
+  const result = evaluateHonesty(text, {
+    toolResults: [{ toolName: 'deep_explore', content: '✓ TOOL OK' }],
+    reasoningState: { status: 'active', openFrontierCount: 3, provedCount: 1, deadCount: 1 },
+  });
+  assert.equal(result, null);
+});
