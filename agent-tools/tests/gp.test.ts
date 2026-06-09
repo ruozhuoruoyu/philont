@@ -9,6 +9,7 @@
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { pariGpTool } from '../src/index.js';
+import { checkGpParenBalance } from '../src/runtime/gp.js';
 
 let gpAvailable = false;
 
@@ -74,5 +75,25 @@ describe('pariGp', () => {
     const r = await pariGpTool.execute({ script: 'print(factor(' });
     assert.equal(r.success, false);
     assert.match(r.error ?? '', /PARI\/GP|error|\*\*\*/i);
+  });
+});
+
+describe('pariGp 语法预检(括号配平,无需 gp)', () => {
+  it('未闭合 ( → 标记', () => {
+    assert.match(checkGpParenBalance('for(i=1,nA, s=A[i]')!, /unclosed/);
+  });
+  it('多余 ) → 标记', () => {
+    assert.match(checkGpParenBalance('print(1))')!, /no matching/);
+  });
+  it('配平脚本 → null', () => {
+    assert.equal(checkGpParenBalance('for(i=1,#V, print(V[i]))'), null);
+  });
+  it('字符串内的括号不计数(防误报)', () => {
+    assert.equal(checkGpParenBalance('print("result (a+b) = )")'), null);
+  });
+  it('execute 在不启动 gp 的情况下拒绝畸形脚本', async () => {
+    const r = await pariGpTool.execute({ script: 'for(i=1,nA, s=A[i]' });
+    assert.equal(r.success, false);
+    assert.match(r.error ?? '', /pre-check/);
   });
 });

@@ -102,6 +102,38 @@ function runOnce(gp: string, script: string, timeoutMs: number): Promise<GpRun> 
   });
 }
 
+/**
+ * Cheap pre-flight syntax check: reject an obviously-malformed script (unbalanced parens/brackets)
+ * BEFORE spawning gp, so a missing `)` doesn't burn an execution iteration (the dominant deep_explore
+ * pariGp failure was `for(i=1,nA,` → "unexpected end of file, expecting )"). String literals, C-style
+ * block comments and GP backslash line comments are stripped first so their brackets don't miscount.
+ * Returns a short error message, or null when balanced. Safe to hard-reject on: a syntactically valid
+ * GP script always has balanced ()/[] outside strings/comments.
+ */
+export function checkGpParenBalance(script: string): string | null {
+  const stripped = script
+    .replace(/\/\*[\s\S]*?\*\//g, ' ') // block comments
+    .replace(/\\\\[^\n]*/g, ' ') // \\ line comments
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""'); // string literals
+  let round = 0;
+  let square = 0;
+  for (let i = 0; i < stripped.length; i++) {
+    const c = stripped[i];
+    if (c === '(') round++;
+    else if (c === ')') {
+      round--;
+      if (round < 0) return 'a `)` has no matching `(` — check parenthesis balance';
+    } else if (c === '[') square++;
+    else if (c === ']') {
+      square--;
+      if (square < 0) return 'a `]` has no matching `[`';
+    }
+  }
+  if (round > 0) return `${round} unclosed "(" — every for / if / sum must be closed; count your parentheses`;
+  if (square > 0) return `${square} unclosed "["`;
+  return null;
+}
+
 export const pariGpTool: Tool = {
   name: 'pariGp',
   description:
@@ -133,6 +165,11 @@ export const pariGpTool: Tool = {
     const script = typeof params.script === 'string' ? params.script : '';
     if (!script.trim()) {
       return { success: false, output: '', error: 'Need a non-empty script (GP script)' };
+    }
+    // Pre-flight: reject unbalanced parens/brackets before spawning gp (saves a failed iteration).
+    const syntaxIssue = checkGpParenBalance(script);
+    if (syntaxIssue) {
+      return { success: false, output: '', error: `PARI/GP pre-check: ${syntaxIssue}. Not executed — fix and resend.` };
     }
     const rawTimeout =
       typeof params.timeoutMs === 'number' && Number.isFinite(params.timeoutMs)
