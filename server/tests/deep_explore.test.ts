@@ -681,3 +681,11 @@ test('withNoProgressStop: 一次 reason 提交会重置计时,真干活的轮不
   assert.equal(w.stalled.value, false);
   assert.equal(aborts, 0);
 });
+
+test('PARI/GP primer 含 sum/for 区间迭代规则(止血 gp-args "too few arguments")', () => {
+  const mem = openMemoryDb(':memory:');
+  const { session } = mem.reasoning.createSession({ goal: 'G' });
+  const p = buildDiscoverPrompt(session, mem.reasoning.getNodes(session.id), 'seed');
+  assert.match(p, /sum\(i=1, #V/);          // the correct range-iteration idiom is taught
+  assert.match(p, /too few arguments/);     // names the exact recurring error
+});
