@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>philont logo drafts</title>
+<style>
+  :root { font-family: system-ui, -apple-system, sans-serif; }
+  body { margin: 0; background: #f5f7fa; color: #1a1a1a; }
+  header { padding: 28px 32px 8px; }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: .5px; }
+  header p { margin: 6px 0 0; color: #6b7280; font-size: 13px; max-width: 720px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; padding: 24px 32px 60px; }
+  .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; overflow: hidden; }
+  .card h2 { font-size: 15px; margin: 0; padding: 16px 18px 4px; }
+  .card .desc { font-size: 12px; color: #6b7280; padding: 0 18px 14px; line-height: 1.5; min-height: 54px; }
+  .row { display: flex; align-items: center; gap: 22px; padding: 16px 18px; border-top: 1px solid #f0f0f0; }
+  .row.dark { background: #14161a; }
+  .row .label { font-size: 11px; color: #9ca3af; width: 64px; flex: none; }
+  .row.dark .label { color: #6b7280; }
+  .sizes { display: flex; align-items: center; gap: 18px; }
+  .header-mock { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; letter-spacing: 1px; }
+  .row.dark .header-mock { color: #e5e7eb; }
+  .swatch { display:flex; gap:18px; align-items:center; padding: 14px 18px; border-top: 1px solid #f0f0f0; }
+  .ink-indigo { color: #312e81; }
+  .ink-blue   { color: #1976d2; }
+  .ink-black  { color: #1a1a1a; }
+  .cap { font-size:11px; color:#9ca3af; width:64px; flex:none;}
+</style>
+</head>
+<body>
+<header>
+  <h1>philont · logo 草稿对比</h1>
+  <p>三版方案 × 多尺寸 × 亮/暗底 × 三种墨色。单色、用 <code>currentColor</code> 上色,所以最终接进 web-ui 时一行 CSS 就能换色。favicon 那一格是真实 16px,看缩小后还认不认得出穿轴。</p>
+</header>
+
+<div class="grid">
+  <!-- A -->
+  <div class="card">
+    <h2>A · Φ 存在体(主推)</h2>
+    <div class="desc">竖轴穿过同心层,正中实心小核=内核小模型,外圈=策略/记忆层 & 生长年轮。名字 + 架构非模型 + 进化 + 诚实之眼,四合一。</div>
+    <div class="row"><span class="label">大 / 96</span><div class="sizes ink-indigo" data-logo="A" data-px="96"></div></div>
+    <div class="row"><span class="label">顶栏 / 28</span>
+      <div class="header-mock ink-indigo"><span data-logo="A" data-px="28"></span>PHILONT</div>
+    </div>
+    <div class="row dark"><span class="label">暗底 / 28</span>
+      <div class="header-mock ink-blue"><span data-logo="A" data-px="28"></span>PHILONT</div>
+    </div>
+    <div class="row"><span class="label">favicon 16</span><div class="sizes ink-indigo" data-logo="A" data-px="16"></div><div class="sizes ink-black" data-logo="A" data-px="16"></div></div>
+    <div class="swatch"><span class="cap">三色</span><span class="ink-indigo" data-logo="A" data-px="40"></span><span class="ink-blue" data-logo="A" data-px="40"></span><span class="ink-black" data-logo="A" data-px="40"></span></div>
+  </div>
+
+  <!-- B -->
+  <div class="card">
+    <h2>B · 极简几何 Φ</h2>
+    <div class="desc">只留"竖线穿圆"。丢掉年轮叙事,换最高辨识度和可缩放性。冷静工程感,favicon 最稳。</div>
+    <div class="row"><span class="label">大 / 96</span><div class="sizes ink-indigo" data-logo="B" data-px="96"></div></div>
+    <div class="row"><span class="label">顶栏 / 28</span>
+      <div class="header-mock ink-indigo"><span data-logo="B" data-px="28"></span>PHILONT</div>
+    </div>
+    <div class="row dark"><span class="label">暗底 / 28</span>
+      <div class="header-mock ink-blue"><span data-logo="B" data-px="28"></span>PHILONT</div>
+    </div>
+    <div class="row"><span class="label">favicon 16</span><div class="sizes ink-indigo" data-logo="B" data-px="16"></div><div class="sizes ink-black" data-logo="B" data-px="16"></div></div>
+    <div class="swatch"><span class="cap">三色</span><span class="ink-indigo" data-logo="B" data-px="40"></span><span class="ink-blue" data-logo="B" data-px="40"></span><span class="ink-black" data-logo="B" data-px="40"></span></div>
+  </div>
+
+  <!-- C -->
+  <div class="card">
+    <h2>C · 偏心核 + 光环(无字母)</h2>
+    <div class="desc">不靠 Φ。小核偏心,几圈非对称光环朝一个方向生长 → 内在驱动、活物感。更抽象,但丢了名字的字母关联。</div>
+    <div class="row"><span class="label">大 / 96</span><div class="sizes ink-indigo" data-logo="C" data-px="96"></div></div>
+    <div class="row"><span class="label">顶栏 / 28</span>
+      <div class="header-mock ink-indigo"><span data-logo="C" data-px="28"></span>PHILONT</div>
+    </div>
+    <div class="row dark"><span class="label">暗底 / 28</span>
+      <div class="header-mock ink-blue"><span data-logo="C" data-px="28"></span>PHILONT</div>
+    </div>
+    <div class="row"><span class="label">favicon 16</span><div class="sizes ink-indigo" data-logo="C" data-px="16"></div><div class="sizes ink-black" data-logo="C" data-px="16"></div></div>
+    <div class="swatch"><span class="cap">三色</span><span class="ink-indigo" data-logo="C" data-px="40"></span><span class="ink-blue" data-logo="C" data-px="40"></span><span class="ink-black" data-logo="C" data-px="40"></span></div>
+  </div>
+</div>
+
+<script>
+// All SVGs use currentColor so the wrapper's CSS color drives them.
+const LOGOS = {
+  // A: vertical axis through concentric rings + solid core (Φ being)
+  A: `<svg viewBox="0 0 64 64" width="SZ" height="SZ" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="philont">
+    <line x1="32" y1="5" x2="32" y2="59" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/>
+    <circle cx="32" cy="32" r="20" stroke="currentColor" stroke-width="2"/>
+    <circle cx="32" cy="32" r="12.5" stroke="currentColor" stroke-width="2" opacity="0.65"/>
+    <circle cx="32" cy="32" r="4.4" fill="currentColor"/>
+  </svg>`,
+  // B: minimal Φ — one ring, one axis
+  B: `<svg viewBox="0 0 64 64" width="SZ" height="SZ" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="philont">
+    <line x1="32" y1="6" x2="32" y2="58" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"/>
+    <circle cx="32" cy="32" r="17" stroke="currentColor" stroke-width="3.4"/>
+  </svg>`,
+  // C: off-center core + asymmetric growth rings
+  C: `<svg viewBox="0 0 64 64" width="SZ" height="SZ" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="philont">
+    <circle cx="29" cy="36" r="21" stroke="currentColor" stroke-width="1.6" opacity="0.45"/>
+    <circle cx="31" cy="34" r="14" stroke="currentColor" stroke-width="2" opacity="0.75"/>
+    <circle cx="33" cy="31" r="7.5" stroke="currentColor" stroke-width="2.4"/>
+    <circle cx="34.5" cy="29.5" r="3.4" fill="currentColor"/>
+  </svg>`
+};
+document.querySelectorAll('[data-logo]').forEach(el => {
+  const svg = LOGOS[el.dataset.logo].replaceAll('SZ', el.dataset.px);
+  el.insertAdjacentHTML('beforeend', svg);
+});
+</script>
+</body>
+</html>
