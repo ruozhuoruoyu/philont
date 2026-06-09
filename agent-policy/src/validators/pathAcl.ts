@@ -66,21 +66,35 @@ const DEFAULT_PATH_FIELDS = ['path', 'from', 'to', 'cwd'];
  *
  * Simplified copy of agent-tools/src/fs/glob.ts (avoids cross-package dependency)
  */
+// Platform branch: Windows file systems use backslash separators and are case-INsensitive; POSIX uses
+// forward slashes and is case-sensitive. The glob patterns are written with forward slashes, so on
+// Windows we normalise backslashes to forward slashes on both pattern and subject and compile the regex
+// case-insensitively. Without this, denylist patterns with internal separators (the .ssh and
+// .aws/credentials style entries) silently fail to match the backslash paths that path.resolve produces
+// on Windows.
+const IS_WINDOWS = process.platform === 'win32';
+
+/** Normalise a path/pattern for glob matching: forward slashes on Windows, unchanged on POSIX. */
+function toMatchForm(s: string): string {
+  return IS_WINDOWS ? s.replace(/\\/g, '/') : s;
+}
+
 function globToRegex(pattern: string): RegExp {
-  // Expand ~ to homedir
+  // Expand ~ to homedir, then normalise separators (Windows) so `/`-style patterns match.
   const expanded = pattern.startsWith('~')
     ? homedir() + pattern.slice(1)
     : pattern;
+  const src = toMatchForm(expanded);
 
   let regex = '';
   let i = 0;
-  while (i < expanded.length) {
-    const c = expanded[i];
+  while (i < src.length) {
+    const c = src[i];
     if (c === '*') {
-      if (expanded[i + 1] === '*') {
+      if (src[i + 1] === '*') {
         regex += '.*';
         i += 2;
-        if (expanded[i] === '/') i++;
+        if (src[i] === '/') i++;
         continue;
       }
       regex += '[^/]*';
@@ -93,7 +107,8 @@ function globToRegex(pattern: string): RegExp {
     }
     i++;
   }
-  return new RegExp('^' + regex + '$');
+  // Windows file systems are case-insensitive → match patterns case-insensitively there.
+  return new RegExp('^' + regex + '$', IS_WINDOWS ? 'i' : '');
 }
 
 /** Normalise path: expand ~, convert to absolute, eliminate .. */
@@ -120,9 +135,10 @@ function extractPaths(params: Record<string, unknown>, fields: string[]): string
 /** Check whether normalizedPath matches any of the given glob patterns */
 function matchesAny(normalizedPath: string, patterns: string[] | undefined): boolean {
   if (!patterns || patterns.length === 0) return false;
+  const subject = toMatchForm(normalizedPath);
   for (const pat of patterns) {
     const rx = globToRegex(pat);
-    if (rx.test(normalizedPath)) return true;
+    if (rx.test(subject)) return true;
   }
   return false;
 }
