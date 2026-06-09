@@ -117,14 +117,19 @@ test('owner scoping (v28): getMostRecentActiveSession(owner) only sees its own c
   mem.close();
 });
 
-test('owner scoping: pre-v28 NULL-owner session is not auto-resumed by a scoped continue', () => {
+test('owner scoping: pre-v28 NULL-owner session stays resumable by any channel (graceful migration)', () => {
   const mem = openMemoryDb(':memory:');
   // no ownerSessionId → stored NULL (simulates a session created before v28)
   const legacy = mem.reasoning.createSession({ goal: 'old session' }).session;
   assert.equal(legacy.ownerSessionId, null);
-  // a scoped lookup by some channel does NOT pick up the NULL-owner session
-  assert.equal(mem.reasoning.getMostRecentActiveSession('wechat:u:u'), null);
-  // but the legacy global lookup still finds it
-  assert.equal(mem.reasoning.getMostRecentActiveSession()!.id, legacy.id);
+  // graceful: a scoped continue from ANY channel still picks up the legacy NULL-owner session
+  assert.equal(mem.reasoning.getMostRecentActiveSession('wechat:u:u')!.id, legacy.id);
+  assert.equal(mem.reasoning.getMostRecentActiveSession('9akb4p61e5i')!.id, legacy.id);
+
+  // ...but a NEW owned session is strictly isolated: another channel never sees it — it only ever
+  // sees the legacy NULL one, never the wechat-owned one.
+  const owned = mem.reasoning.createSession({ goal: 'new', ownerSessionId: 'wechat:u:u' }).session;
+  assert.equal(mem.reasoning.getMostRecentActiveSession('9akb4p61e5i')!.id, legacy.id);
+  assert.equal(mem.reasoning.getMostRecentActiveSession('wechat:u:u')!.id, owned.id);
   mem.close();
 });

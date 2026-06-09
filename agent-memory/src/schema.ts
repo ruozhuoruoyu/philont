@@ -1029,8 +1029,9 @@ function migrateV26ToV27(db: Database.Database): void {
  * v27→v28: add owner_session_id to reasoning_sessions so deep_explore continue/status/discover is scoped
  * to the chat session that started the reasoning. Prevents two concurrent channels (e.g. WeChat + web-ui)
  * from hijacking each other's most-recent-active reasoning session via getMostRecentActiveSession().
- * ADD COLUMN only; pre-existing sessions keep NULL owner and will not be auto-resumed by a scoped
- * continue (start a new one). Skip if the table does not exist (new DB DDL already includes the column).
+ * ADD COLUMN only; pre-existing sessions keep NULL owner and stay resumable by any channel (graceful
+ * migration — they age out as they close), while every new session is strictly owner-scoped. Skip if
+ * the table does not exist (new DB DDL already includes the column).
  */
 function migrateV27ToV28(db: Database.Database): void {
   if (!tableExists(db, 'reasoning_sessions')) return;

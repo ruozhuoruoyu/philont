@@ -194,7 +194,13 @@ export class ReasoningStore {
             .all()
         : this.db
             .prepare(
-              `SELECT * FROM reasoning_sessions WHERE status = 'active' AND owner_session_id = ? ORDER BY updated_at DESC`,
+              // Owner-scoped, BUT legacy NULL-owner sessions (created before v28, when no owner was
+              // recorded) stay resumable by any channel — a graceful migration so an in-flight
+              // pre-upgrade reasoning session isn't orphaned. They age out as they close; every NEW
+              // session has a non-NULL owner and is therefore strictly isolated.
+              `SELECT * FROM reasoning_sessions
+               WHERE status = 'active' AND (owner_session_id = ? OR owner_session_id IS NULL)
+               ORDER BY updated_at DESC`,
             )
             .all(ownerSessionId)
     ) as SessionRow[];
