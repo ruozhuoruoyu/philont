@@ -34,6 +34,21 @@ xcode-select --install
 # Windows: install "Visual Studio Build Tools" with the Desktop C++ workload
 ```
 
+### Optional — only for specific features
+
+None of these are needed to boot philont. Install one only if you use the matching feature; without it,
+the tool returns a clear "not installed" error rather than crashing.
+
+| Feature | Needs | Install |
+| --- | --- | --- |
+| **Deep-reasoning compute** — `deep_explore` uses the `pariGp` tool (a number-theory CAS) to compute instances and search for counterexamples | **PARI/GP** (`gp`) | `apt install pari-gp` · `brew install pari` · [Windows build](https://pari.math.u-bordeaux.fr/download.html). Or point `PHILONT_GP` at the `gp` binary. |
+| **Formal verification** — the `z3Verify` tool SMT-checks a claim | **Python 3 + z3-solver** | `pip install z3-solver` (Python 3 is already required by the C toolchain). |
+| **Browser automation** — Playwright MCP (`PHILONT_MCP_BROWSER=on`) | **Playwright browser** | `npx playwright install chromium` |
+
+> **In Docker:** the bundled image installs a document/media toolchain (ffmpeg, poppler, common Python
+> doc libs) but **not** PARI/GP, z3-solver, or Playwright browsers. If you rely on deep-reasoning compute,
+> formal verification, or browser automation in a container, add the matching line to your Dockerfile.
+
 ### The one-command path
 
 ```bash
