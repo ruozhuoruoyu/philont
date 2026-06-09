@@ -216,6 +216,25 @@ export class ReasoningStore {
     return this.listActiveSessions(ownerSessionId)[0] ?? null;
   }
 
+  /**
+   * Compact ground-truth snapshot of a session: status + open-frontier / proved / dead counts.
+   * "Open frontier" = open leaf nodes (no children). Used by the honesty gate to check a
+   * "reasoning concluded" claim against reality, and reusable for progress rendering.
+   */
+  summarizeSession(
+    sessionId: string,
+  ): { status: ReasoningSessionStatus; openFrontierCount: number; provedCount: number; deadCount: number } | null {
+    const session = this.getSession(sessionId);
+    if (!session) return null;
+    const nodes = this.getNodes(sessionId);
+    const hasChild = new Set<string>();
+    for (const n of nodes) if (n.parentId) hasChild.add(n.parentId);
+    const openFrontierCount = nodes.filter((n) => n.status === 'open' && !hasChild.has(n.id)).length;
+    const provedCount = nodes.filter((n) => n.status === 'proved').length;
+    const deadCount = nodes.filter((n) => n.status === 'dead_end').length;
+    return { status: session.status, openFrontierCount, provedCount, deadCount };
+  }
+
   getNode(sessionId: string, nodeId: string): ReasoningNode | null {
     const row = this.db
       .prepare<[string, string]>(

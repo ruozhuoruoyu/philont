@@ -223,7 +223,9 @@ export interface HonestyEvaluation {
     | 'unverified_destructive'
     | 'unknown_results_with_claim'
     | 'memory_claim_without_write'
-    | 'fabricated_size_claim';
+    | 'fabricated_size_claim'
+    | 'fabricated_reasoning_state'
+    | 'fabricated_round_result';
   /** Matched claim phrase (used as reference in reminder message) */
   matchedClaim: string;
   /** tool_result counts for this turn */
@@ -234,6 +236,18 @@ export interface HonestyEvaluation {
   evidence: string;
 }
 
+/**
+ * Compact ground-truth snapshot of the owner-scoped deep_explore reasoning session, supplied by the
+ * caller (chat-handler) so the gate can check a "this reasoning is concluded" claim against reality.
+ * null = the current chat session has no active reasoning session.
+ */
+export interface ReasoningSnapshot {
+  status: string;
+  openFrontierCount: number;
+  provedCount: number;
+  deadCount: number;
+}
+
 export interface EvaluateOptions {
   /**
    * All tool_results for this turn (chronological order), including tool name + content.
@@ -242,6 +256,11 @@ export interface EvaluateOptions {
   toolResults?: ToolResultRecord[];
   /** @deprecated Legacy API compatibility; new code should use toolResults */
   toolResultContents?: string[];
+  /**
+   * Ground truth of the owner's active reasoning session (deep_explore), or null if none. Lets the gate
+   * catch "I proved it / all paths closed" claims that the reasoning tree does not actually support.
+   */
+  reasoningState?: ReasoningSnapshot | null;
 }
 
 /**
@@ -254,6 +273,53 @@ export interface EvaluateOptions {
  *   2. Destructive tool (incl. shell-write) succeeded but no observation tool fallback + completion claim → medium (unverified_destructive)
  *   3. All tool_results unknown + completion claim → medium (unknown_results_with_claim)
  */
+// ── Reasoning-state claims (deep_explore) ─────────────────────────────────────────────
+//
+// A different KIND of dishonesty than task-completion claims: the model asserts a deep_explore
+// reasoning session reached a TERMINAL state (proved / all paths closed / final verdict / cannot
+// prove), or narrates per-round progress, when the reasoning tree does not support it. The
+// task-completion vocabulary above does not cover this, and a per-round `✓ deep_explore OK` satisfies
+// the completion gate's "is there a success?" test no matter how big the claim — so these slip through.
+// We instead compare against the tree's actual state (passed in via opts.reasoningState).
+
+// Positive-assertion only — phrased so common negations ("还没证明", "not yet proved", "to be proved")
+// do NOT match. Even so the branch only fires when an active session has an open frontier, so a stray
+// match can't false-fire on its own.
+const REASONING_TERMINAL_PATTERNS: ReadonlyArray<RegExp> = [
+  /(?:全部|所有|整个|全节点|所有节点|五条|5\s*条)[^。！？\n]{0,8}(?:闭合|证毕|证完)/,
+  /(?:会话|session|推理树?)[^。！？\n]{0,8}(?:全部闭合|已闭合|全节点闭合)/,
+  /最终判决/,
+  /(?:根命题|猜想|定理)[^。！？\n]{0,10}(?:已证|证毕|证明完成|已成立)/,
+  /\bQ\.?\s*E\.?\s*D\.?\b/,
+  /(?:root\s*proposition|conjecture|theorem)[^.!?\n]{0,14}(?:proved|proven|solved)\b/i,
+  /(?:不能|无法|不可能)[^。！？\n]{0,14}(?:提供|给出|构成|得到)[^。！？\n]{0,8}(?:证明|证明路径)/,
+];
+
+/** Per-round progress narration — vocabulary that ONLY makes sense if a deep_explore round actually ran. */
+const REASONING_ROUND_RESULT_PATTERNS: ReadonlyArray<RegExp> = [
+  /第\s*\d+\s*轮/,
+  /\+\s*\d+\s*证/,
+  /\d+\s*开\s*(?:→|->|—>|到)\s*\d+\s*开/,
+  /时间帽/,
+  /\bround\s*\d+\b/i,
+];
+
+export function findReasoningTerminalClaim(text: string): string | null {
+  for (const re of REASONING_TERMINAL_PATTERNS) {
+    const m = re.exec(text);
+    if (m) return m[0].slice(0, 60);
+  }
+  return null;
+}
+
+export function findRoundResultClaim(text: string): string | null {
+  for (const re of REASONING_ROUND_RESULT_PATTERNS) {
+    const m = re.exec(text);
+    if (m) return m[0].slice(0, 60);
+  }
+  return null;
+}
+
 export function evaluateHonesty(
   assistantText: string,
   opts: EvaluateOptions,
@@ -311,6 +377,52 @@ export function evaluateHonesty(
         `Your claimed "${fabricated.raw}" (approximately ${fabricated.bytes} bytes)` +
         ` has no corresponding number in this turn's tool outputs — may have been fabricated. Go back and check the actual numbers from the most recent stat / dir / ls.`,
     };
+  }
+
+  // ── deep_explore: terminal-state claim contradicted by the reasoning tree → high ───────────
+  // "全部闭合 / session solved / 根命题已证 / 最终判决" while the tree still has OPEN frontier nodes
+  // is a verifiable lie. Only fires when an active owner session exists (rs != null), so abstract
+  // proof-talk with no session in play never false-fires.
+  const rs = opts.reasoningState;
+  const terminalClaim = findReasoningTerminalClaim(assistantText);
+  if (terminalClaim && rs && rs.openFrontierCount > 0) {
+    return {
+      severity: 'high',
+      reason: 'fabricated_reasoning_state',
+      matchedClaim: terminalClaim,
+      okCount: ok,
+      failCount: fail,
+      unknownCount: unknown,
+      evidence:
+        `You claimed the reasoning is concluded ("${terminalClaim}"), but the reasoning tree still has ` +
+        `${rs.openFrontierCount} OPEN frontier node(s) (proved ${rs.provedCount}, dead ${rs.deadCount}, ` +
+        `session ${rs.status}). Call deep_explore(action=status) and report the ACTUAL state — do not ` +
+        `declare it closed/solved while nodes are still open.`,
+    };
+  }
+
+  // ── deep_explore: round-result narration with no actual round this turn → high ─────────────
+  // "第2轮 / +1证 / 7开→8开 / 时间帽" is deep_explore round jargon; if no successful deep_explore
+  // call ran this turn, the model invented the progress from a stale snapshot.
+  const roundClaim = findRoundResultClaim(assistantText);
+  if (roundClaim) {
+    const deepExploreRan = records.some(
+      (r) => r.toolName === 'deep_explore' && classifyToolResult(r.content) === 'ok',
+    );
+    if (!deepExploreRan) {
+      return {
+        severity: 'high',
+        reason: 'fabricated_round_result',
+        matchedClaim: roundClaim,
+        okCount: ok,
+        failCount: fail,
+        unknownCount: unknown,
+        evidence:
+          `You narrated deep_explore round progress ("${roundClaim}"), but no successful deep_explore ` +
+          `call was made this turn. Round results must come from an actual deep_explore(action=continue) ` +
+          `call — never invented from the in-progress snapshot in the prompt.`,
+      };
+    }
   }
 
   // 3 branches after the completion claim

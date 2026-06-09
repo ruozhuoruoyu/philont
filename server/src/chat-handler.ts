@@ -6068,8 +6068,13 @@ async function runToolLoop(
       // regenerate once so the lie never leaves.
       if (honestyAttempts < 1) {
         const recentToolResults = extractRecentToolResults(messages);
+        // Ground truth for the deep_explore honesty checks: the owner-scoped active reasoning session's
+        // tree state (null if none). Lets the gate catch "全部闭合 / proved / 最终判决" claims the tree
+        // doesn't support, and round-result narration with no actual round this turn.
+        const ownerReasoning = memory.reasoning.getMostRecentActiveSession(sessionId);
         const honesty = evaluateHonesty(response.content, {
           toolResults: recentToolResults,
+          reasoningState: ownerReasoning ? memory.reasoning.summarizeSession(ownerReasoning.id) : null,
         });
         if (!honesty) {
           // Explicitly print "passed" status so tests can see the gate actually ran + no false positives

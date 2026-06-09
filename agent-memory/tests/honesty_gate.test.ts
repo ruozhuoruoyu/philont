@@ -634,3 +634,73 @@ test('shellLooksLikeWrite: 写信号 vs 读信号', async () => {
   assert.equal(shellLooksLikeWrite('python -c "print(1+1)"'), false);
   assert.equal(shellLooksLikeWrite('node -e "console.log(2+2)"'), false);
 });
+
+// ── deep_explore reasoning-state honesty (reasoning-tree check) ──────────────────────────
+test('fabricated_reasoning_state: 声称"全部闭合/最终判决"但树仍有 open frontier → high (复现生产漏检)', () => {
+  // Exact production miss: deep_explore returned ✓ OK (which used to satisfy the gate), yet the
+  // model claimed the whole reasoning was concluded while the tree still had open nodes.
+  const text = '会话全部闭合。最终判决：加法能量+BSG 工具链也不能为二元 Goldbach 提供独立证明。';
+  const result = evaluateHonesty(text, {
+    toolResults: [{ toolName: 'deep_explore', content: '✓ TOOL OK\nReasoning advanced; session still active.' }],
+    reasoningState: { status: 'active', openFrontierCount: 4, provedCount: 1, deadCount: 0 },
+  });
+  assert.equal(result?.severity, 'high');
+  assert.equal(result?.reason, 'fabricated_reasoning_state');
+});
+
+test('fabricated_reasoning_state: "根命题已证毕" 但 open frontier>0 → high', () => {
+  const result = evaluateHonesty('根命题已证毕,可以收工了。', {
+    toolResults: [{ toolName: 'deep_explore', content: '✓ TOOL OK' }],
+    reasoningState: { status: 'active', openFrontierCount: 2, provedCount: 3, deadCount: 1 },
+  });
+  assert.equal(result?.reason, 'fabricated_reasoning_state');
+});
+
+test('fabricated_reasoning_state: 真闭合(open frontier=0)→ 不触发', () => {
+  const result = evaluateHonesty('会话全部闭合,根命题已证毕。', {
+    toolResults: [{ toolName: 'deep_explore', content: '✓ TOOL OK\nRoot proposition proved; session solved.' }],
+    reasoningState: { status: 'solved', openFrontierCount: 0, provedCount: 5, deadCount: 2 },
+  });
+  assert.equal(result, null);
+});
+
+test('fabricated_reasoning_state: 无活跃推理会话(抽象讨论)→ 不触发(避免误报)', () => {
+  // "proved" appears (in a negation), but no reasoning session is in play → must not fire.
+  const result = evaluateHonesty('黎曼猜想至今没有被证明 (the conjecture is not proved).', {
+    toolResults: [{ toolName: 'webSearch', content: '✓ TOOL OK\n...' }],
+    reasoningState: null,
+  });
+  assert.equal(result, null);
+});
+
+test('fabricated_round_result: 叙述"第2轮/+1证/7开→8开/时间帽"但本回合没成功调 deep_explore → high', () => {
+  const text = '第2轮 +1证(BSG 引理),7开→8开,时间帽到了先停。';
+  const result = evaluateHonesty(text, {
+    toolResults: [{ toolName: 'deep_explore', content: '⚠ TOOL FAILED — No in-progress session' }],
+    reasoningState: null,
+  });
+  assert.equal(result?.severity, 'high');
+  assert.equal(result?.reason, 'fabricated_round_result');
+});
+
+test('fabricated_round_result: 编造回合(tools=0,完全没调)→ high', () => {
+  const result = evaluateHonesty('第3轮推进:新增 2 证。', { toolResults: [] });
+  assert.equal(result?.reason, 'fabricated_round_result');
+});
+
+test('fabricated_round_result: 真跑了一轮(deep_explore ✓ OK)→ 不触发', () => {
+  const result = evaluateHonesty('第2轮完成,7开→8开。', {
+    toolResults: [{ toolName: 'deep_explore', content: '✓ TOOL OK\nReasoning advanced.' }],
+    reasoningState: { status: 'active', openFrontierCount: 8, provedCount: 1, deadCount: 0 },
+  });
+  assert.equal(result, null);
+});
+
+test('reasoning checks: 普通完成宣言不受影响(回归)', () => {
+  // A normal task-completion claim with a success still passes (no reasoning vocabulary).
+  const result = evaluateHonesty('文件已成功生成。', {
+    toolResults: [{ toolName: 'writeFile', content: '✓ TOOL OK\n1024 bytes written' }],
+    reasoningState: null,
+  });
+  assert.equal(result, null);
+});
