@@ -36,14 +36,15 @@ test('fresh DB: initSchema creates current schema with all new tables and column
   initSchema(db);
 
   assert.equal(getSchemaVersion(db), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 27);
+  assert.equal(SCHEMA_VERSION, 28);
 
-  // v25: 深度推理两表;v26: value-guided 选点列;v27: technique(MAP-Elites 分桶)
+  // v25: 深度推理两表;v26: value-guided 选点列;v27: technique(MAP-Elites 分桶);v28: owner_session_id(渠道隔离)
   assert.ok(tableExists(db, 'reasoning_sessions'));
   assert.ok(tableExists(db, 'reasoning_nodes'));
   assert.ok(hasColumn(db, 'reasoning_nodes', 'value'), 'v26: reasoning_nodes 缺 value');
   assert.ok(hasColumn(db, 'reasoning_nodes', 'visits'), 'v26: reasoning_nodes 缺 visits');
   assert.ok(hasColumn(db, 'reasoning_nodes', 'technique'), 'v27: reasoning_nodes 缺 technique');
+  assert.ok(hasColumn(db, 'reasoning_sessions', 'owner_session_id'), 'v28: reasoning_sessions 缺 owner_session_id');
 
   // v8: 全局时间线 session 行('global')由 initSchema 自动建,作为
   // K0 时间线 bookkeeping 的占位

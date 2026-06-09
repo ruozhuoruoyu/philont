@@ -3165,7 +3165,7 @@ function buildMemoryPrefix(signalBus?: TurnSignalBus): string {
 
     // Deep reasoning subsystem: informs the next turn that an active reasoning session exists and can be continued.
     // When env flag is off, the reasoning table is empty → listActiveSessions is empty → returns empty string, zero cost.
-    const reasoningSection = buildReasoningProgressSection(memory.reasoning, { maxChars: 800 });
+    const reasoningSection = buildReasoningProgressSection(memory.reasoning, { maxChars: 800, ownerSessionId: currentSessionId() });
     if (reasoningSection) {
       lines.push('');
       lines.push(reasoningSection);

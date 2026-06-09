@@ -144,12 +144,14 @@ export function buildResearchPendingGrantSection(
  */
 export function buildReasoningProgressSection(
   reasoning: ReasoningStore,
-  opts: { maxChars?: number; topFrontier?: number } = {},
+  opts: { maxChars?: number; topFrontier?: number; ownerSessionId?: string | null } = {},
 ): string {
   const maxChars = opts.maxChars ?? 800;
   const topFrontier = Math.max(1, opts.topFrontier ?? 4);
 
-  const session = reasoning.listActiveSessions()[0];
+  // v28: scope to the owner chat session so this hint never surfaces ANOTHER channel's reasoning
+  // (the HIJACK failure mode noted below). Omitting ownerSessionId falls back to global (legacy).
+  const session = reasoning.listActiveSessions(opts.ownerSessionId)[0];
   if (!session) return '';
   const nodes = reasoning.getNodes(session.id);
 

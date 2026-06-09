@@ -25,6 +25,8 @@ export interface ReasoningSession {
   goal: string;
   assumptions: string[];
   status: ReasoningSessionStatus;
+  /** Chat session (wechat:… / web-ui id / system:scheduled:…) that started this reasoning; null for pre-v28 sessions. Scopes continue/status so concurrent channels don't hijack each other. */
+  ownerSessionId: string | null;
   rootNodeId: string | null;
   /** Cumulative LLM token cost across turns (single-turn loop gate is PlanBudgetTracker; this is the running total) */
   budgetSpent: number;
@@ -59,6 +61,7 @@ interface SessionRow {
   goal: string;
   assumptions_json: string | null;
   status: string;
+  owner_session_id: string | null;
   root_node_id: string | null;
   budget_spent: number;
   created_at: number;
@@ -89,6 +92,7 @@ function rowToSession(r: SessionRow): ReasoningSession {
     goal: r.goal,
     assumptions: r.assumptions_json ? (JSON.parse(r.assumptions_json) as string[]) : [],
     status: r.status as ReasoningSessionStatus,
+    ownerSessionId: r.owner_session_id ?? null,
     rootNodeId: r.root_node_id,
     budgetSpent: r.budget_spent,
     createdAt: r.created_at,
@@ -130,7 +134,7 @@ export class ReasoningStore {
   constructor(private readonly db: Database.Database) {}
 
   /** Create a session + root node (claim=goal). Returns both. */
-  createSession(input: { goal: string; assumptions?: string[] }): {
+  createSession(input: { goal: string; assumptions?: string[]; ownerSessionId?: string | null }): {
     session: ReasoningSession;
     rootNode: ReasoningNode;
   } {
@@ -139,15 +143,16 @@ export class ReasoningStore {
     const rootId = randomUUID();
 
     this.db
-      .prepare<[string, string, string, string, number, number]>(
+      .prepare<[string, string, string, string | null, string, number, number]>(
         `INSERT INTO reasoning_sessions
-          (id, goal, assumptions_json, status, root_node_id, budget_spent, created_at, updated_at)
-         VALUES (?, ?, ?, 'active', ?, 0, ?, ?)`,
+          (id, goal, assumptions_json, status, owner_session_id, root_node_id, budget_spent, created_at, updated_at)
+         VALUES (?, ?, ?, 'active', ?, ?, 0, ?, ?)`,
       )
       .run(
         sessionId,
         input.goal,
         JSON.stringify(input.assumptions ?? []),
+        input.ownerSessionId ?? null,
         rootId,
         now,
         now,
@@ -176,18 +181,33 @@ export class ReasoningStore {
   }
 
   /** Active sessions, most recently updated first. */
-  listActiveSessions(): ReasoningSession[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM reasoning_sessions WHERE status = 'active' ORDER BY updated_at DESC`,
-      )
-      .all() as SessionRow[];
+  /**
+   * Active sessions, most recently updated first. When `ownerSessionId` is provided, only sessions
+   * started by that chat session are returned — this is what keeps two concurrent channels from
+   * seeing each other's reasoning. Passing `undefined`/`null` returns ALL active sessions (legacy).
+   */
+  listActiveSessions(ownerSessionId?: string | null): ReasoningSession[] {
+    const rows = (
+      ownerSessionId == null
+        ? this.db
+            .prepare(`SELECT * FROM reasoning_sessions WHERE status = 'active' ORDER BY updated_at DESC`)
+            .all()
+        : this.db
+            .prepare(
+              `SELECT * FROM reasoning_sessions WHERE status = 'active' AND owner_session_id = ? ORDER BY updated_at DESC`,
+            )
+            .all(ownerSessionId)
+    ) as SessionRow[];
     return rows.map(rowToSession);
   }
 
-  /** Most recent active session (default target for continue; avoids LLM hallucinating sessionId). */
-  getMostRecentActiveSession(): ReasoningSession | null {
-    return this.listActiveSessions()[0] ?? null;
+  /**
+   * Most recent active session for `ownerSessionId` (default target for continue; avoids LLM
+   * hallucinating sessionId). Scoped to the owner so a continue on one channel never grabs another
+   * channel's reasoning. Omitting `ownerSessionId` falls back to the global most-recent (legacy).
+   */
+  getMostRecentActiveSession(ownerSessionId?: string | null): ReasoningSession | null {
+    return this.listActiveSessions(ownerSessionId)[0] ?? null;
   }
 
   getNode(sessionId: string, nodeId: string): ReasoningNode | null {

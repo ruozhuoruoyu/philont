@@ -93,3 +93,38 @@ test('getTree 返回 session + 全部节点;持久化跨"重新打开 store"(同
   assert.equal(mem.reasoning.getTree('nope'), null);
   mem.close();
 });
+
+test('owner scoping (v28): getMostRecentActiveSession(owner) only sees its own channel', () => {
+  const mem = openMemoryDb(':memory:');
+  const wechat = mem.reasoning.createSession({ goal: 'Goldbach', ownerSessionId: 'wechat:u:u' }).session;
+  const webui = mem.reasoning.createSession({ goal: 'read env', ownerSessionId: '9akb4p61e5i' }).session;
+
+  // owner field round-trips
+  assert.equal(wechat.ownerSessionId, 'wechat:u:u');
+  assert.equal(webui.ownerSessionId, '9akb4p61e5i');
+
+  // scoped lookup returns ONLY the owner's session — no cross-channel hijack
+  assert.equal(mem.reasoning.getMostRecentActiveSession('wechat:u:u')!.id, wechat.id);
+  assert.equal(mem.reasoning.getMostRecentActiveSession('9akb4p61e5i')!.id, webui.id);
+  assert.equal(mem.reasoning.listActiveSessions('wechat:u:u').length, 1);
+
+  // an owner with no session of its own gets nothing (not the other channel's)
+  assert.equal(mem.reasoning.getMostRecentActiveSession('telegram:x'), null);
+
+  // unscoped (legacy) still sees the global most-recent
+  assert.equal(mem.reasoning.listActiveSessions().length, 2);
+  assert.equal(mem.reasoning.getMostRecentActiveSession()!.id, webui.id);
+  mem.close();
+});
+
+test('owner scoping: pre-v28 NULL-owner session is not auto-resumed by a scoped continue', () => {
+  const mem = openMemoryDb(':memory:');
+  // no ownerSessionId → stored NULL (simulates a session created before v28)
+  const legacy = mem.reasoning.createSession({ goal: 'old session' }).session;
+  assert.equal(legacy.ownerSessionId, null);
+  // a scoped lookup by some channel does NOT pick up the NULL-owner session
+  assert.equal(mem.reasoning.getMostRecentActiveSession('wechat:u:u'), null);
+  // but the legacy global lookup still finds it
+  assert.equal(mem.reasoning.getMostRecentActiveSession()!.id, legacy.id);
+  mem.close();
+});

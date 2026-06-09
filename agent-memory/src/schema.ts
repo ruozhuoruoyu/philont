@@ -15,7 +15,7 @@
 
 import type Database from 'better-sqlite3';
 
-export const SCHEMA_VERSION = 27;
+export const SCHEMA_VERSION = 28;
 
 /**
  * Canonical id for the bootstrap root pursuit. Used consistently by v7 migration and empty-DB init
@@ -968,6 +968,7 @@ function migrateV24ToV25(db: Database.Database): void {
       goal              TEXT NOT NULL,
       assumptions_json  TEXT,
       status            TEXT NOT NULL DEFAULT 'active',
+      owner_session_id  TEXT,
       root_node_id      TEXT,
       budget_spent      INTEGER NOT NULL DEFAULT 0,
       created_at        INTEGER NOT NULL,
@@ -1022,6 +1023,22 @@ function migrateV26ToV27(db: Database.Database): void {
   const cols = db.prepare(`PRAGMA table_info(reasoning_nodes)`).all() as Array<{ name: string }>;
   const have = new Set(cols.map((c) => c.name));
   if (!have.has('technique')) db.exec(`ALTER TABLE reasoning_nodes ADD COLUMN technique TEXT`);
+}
+
+/**
+ * v27→v28: add owner_session_id to reasoning_sessions so deep_explore continue/status/discover is scoped
+ * to the chat session that started the reasoning. Prevents two concurrent channels (e.g. WeChat + web-ui)
+ * from hijacking each other's most-recent-active reasoning session via getMostRecentActiveSession().
+ * ADD COLUMN only; pre-existing sessions keep NULL owner and will not be auto-resumed by a scoped
+ * continue (start a new one). Skip if the table does not exist (new DB DDL already includes the column).
+ */
+function migrateV27ToV28(db: Database.Database): void {
+  if (!tableExists(db, 'reasoning_sessions')) return;
+  const cols = db.prepare(`PRAGMA table_info(reasoning_sessions)`).all() as Array<{ name: string }>;
+  const have = new Set(cols.map((c) => c.name));
+  if (!have.has('owner_session_id')) {
+    db.exec(`ALTER TABLE reasoning_sessions ADD COLUMN owner_session_id TEXT`);
+  }
 }
 
 function migrateV19ToV20(db: Database.Database): void {
@@ -1247,6 +1264,9 @@ export function initSchema(db: Database.Database): void {
   }
   if (current < 27) {
     migrateV26ToV27(db);
+  }
+  if (current < 28) {
+    migrateV27ToV28(db);
   }
 
   // 3) Finally run partial indexes that depend on v3 new columns

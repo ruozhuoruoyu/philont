@@ -1582,6 +1582,9 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
     domain: 'self',
     async execute(params): Promise<ToolResult> {
       const action = params.action as string;
+      // Owner = the chat session driving this turn. Scopes reasoning sessions so two concurrent
+      // channels (e.g. WeChat + web-ui) cannot continue/hijack each other's most-recent-active session.
+      const owner = currentSessionId();
 
       if (action === 'start') {
         const goal = typeof params.goal === 'string' ? params.goal.trim() : '';
@@ -1589,12 +1592,12 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
         const assumptions = Array.isArray(params.assumptions)
           ? params.assumptions.filter((a): a is string => typeof a === 'string' && a.trim().length > 0)
           : [];
-        const { session } = reasoning.createSession({ goal, assumptions });
+        const { session } = reasoning.createSession({ goal, assumptions, ownerSessionId: owner });
         return runRound(session);
       }
 
       if (action === 'continue') {
-        const session = reasoning.getMostRecentActiveSession();
+        const session = reasoning.getMostRecentActiveSession(owner);
         if (!session) {
           return {
             success: false,
@@ -1607,7 +1610,7 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
 
       if (action === 'discover') {
         const seed = typeof params.seed === 'string' ? params.seed.trim() : '';
-        let session = reasoning.getMostRecentActiveSession();
+        let session = reasoning.getMostRecentActiveSession(owner);
         if (!session) {
           // No active session: create one using goal or seed as the exploration domain.
           const goal = (typeof params.goal === 'string' ? params.goal.trim() : '') || seed;
@@ -1621,13 +1624,13 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
           const assumptions = Array.isArray(params.assumptions)
             ? params.assumptions.filter((a): a is string => typeof a === 'string' && a.trim().length > 0)
             : [];
-          session = reasoning.createSession({ goal, assumptions }).session;
+          session = reasoning.createSession({ goal, assumptions, ownerSessionId: owner }).session;
         }
         return runDiscoverRound(session, seed);
       }
 
       if (action === 'status') {
-        const session = reasoning.getMostRecentActiveSession();
+        const session = reasoning.getMostRecentActiveSession(owner);
         if (!session) return { success: true, output: 'No deep-exploreing session is in progress right now.' };
         const nodes = reasoning.getNodes(session.id);
         const frontier = computeFrontier(nodes);
@@ -1642,7 +1645,7 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
       }
 
       if (action === 'finalize') {
-        const session = reasoning.getMostRecentActiveSession();
+        const session = reasoning.getMostRecentActiveSession(owner);
         if (!session) return { success: true, output: 'No deep-explore session to finalize.' };
         const report = renderFinalReport(session, reasoning.getNodes(session.id));
         deps.onMilestone?.(report); // persist as a chat bubble so the conclusion is not lost
