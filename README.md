@@ -207,6 +207,24 @@ Issues and pull requests are welcome. See **[CONTRIBUTING.md](CONTRIBUTING.md)**
 
 ---
 
+## Acknowledgements
+
+philont stands on the shoulders of two open-source agents we genuinely admire — and the comparison earlier in this README is about *positioning*, not disparagement. We studied both closely and are better for it. Where we adapted their work, the borrowing is credited inline in the source with a `Reference:` comment (the convention is documented in [CONTRIBUTING.md](CONTRIBUTING.md)); the list below is not exhaustive.
+
+**[Hermes Agent](https://github.com/NousResearch/hermes-agent) — Nous Research.** We owe Hermes a real debt:
+- the dangerous-command pattern set in our permission layer is derived from Hermes' `tools/approval.py` → `agent-policy/src/validators/dangerousCommands.ts`;
+- our WeChat bridge — login state machine, message extraction, and the lenient decrypt variant — follows the Hermes WeChat adapter → `server/src/channels/wechat/*`;
+- our Telegram gateway approach is informed by Hermes' Telegram platform → `server/src/channels/telegram/client.ts`;
+- our tool-call parser handles the `<tool_call>` tag format used by Hermes / Nous models → `server/src/llm-adapter.ts`.
+
+**OpenClaw.** We learned from OpenClaw too:
+- our path-ACL workspace-root resolution is modeled on OpenClaw's `media-tool-shared.ts` → `agent-policy/src/validators/pathAcl.ts`;
+- philont's skills loader is **compatible with the OpenClaw / `clawhub` skill convention** (`<workdir>/skills/`), so skills installed the OpenClaw way work in philont unchanged → `agent-tools/src/skills/loader.ts`.
+
+We also reference [Claude Code](https://claude.com/claude-code)'s WebFetch design and several research papers (FunSearch, LATS, Self-Consistency, …) in the deep-reasoning module; those are credited inline where used. Thank you to all of these projects and their authors.
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
