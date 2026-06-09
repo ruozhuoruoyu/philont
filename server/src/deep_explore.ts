@@ -1338,7 +1338,9 @@ export interface DeepExploreDeps {
   onMilestone?: (text: string) => void;
 }
 
-export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
+export function createDeepExploreTool(
+  deps: DeepExploreDeps,
+): { tool: Tool; advanceSession: (session: ReasoningSession) => Promise<ToolResult> } {
   const { reasoning, miniLoopLLM, subTurnToolRunner, readOnlyToolDefs, actions, skills } = deps;
   const maxIters = deps.maxIters ?? DEFAULT_MAX_ITERS;
   // Tighten: deep_explore is a **reasoning** loop, not a browsing loop. Research tools are
@@ -1623,7 +1625,10 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
     };
   }
 
-  return {
+  /** Advance a specific session by one round (used by the background auto-advance loop). */
+  const advanceSession = (session: ReasoningSession): Promise<ToolResult> => runRound(session);
+
+  const tool: Tool = {
     name: 'deep_explore',
     description:
       'Deep-reasoning engine: persistent reasoning over a hard problem/conjecture via "decompose a subproblem tree → advance over many steps → prove/counterexample/backtrack", ' +
@@ -1639,7 +1644,7 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
     schema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['start', 'continue', 'discover', 'status', 'finalize'] },
+        action: { type: 'string', enum: ['start', 'continue', 'discover', 'status', 'finalize', 'auto_on', 'auto_off'] },
         goal: { type: 'string', description: 'action=start: the root proposition to attack; action=explore with no active session: the exploration domain as the root' },
         seed: { type: 'string', description: 'action=explore optional: the topic/object to focus this round on (e.g. a family of polynomials, a sequence)' },
         assumptions: {
@@ -1724,7 +1729,24 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
         return { success: true, output: report };
       }
 
+      if (action === 'auto_on' || action === 'auto_off') {
+        const session = reasoning.getMostRecentActiveSession(owner);
+        if (!session) {
+          return { success: false, output: '', error: 'No in-progress reasoning session to toggle auto-advance on. Start one first.' };
+        }
+        reasoning.setAutoAdvance(session.id, action === 'auto_on');
+        return {
+          success: true,
+          output:
+            action === 'auto_on'
+              ? `Background auto-advance ENABLED for "${session.goal.slice(0, 50)}". I'll advance it round by round on my own and report milestones; it stops automatically when solved or stuck (needs PHILONT_DEEP_EXPLORE_AUTO_ADVANCE=on on the server).`
+              : `Background auto-advance DISABLED for "${session.goal.slice(0, 50)}".`,
+        };
+      }
+
       return { success: false, output: '', error: `Unknown action: ${String(action)}` };
     },
   };
+
+  return { tool, advanceSession };
 }

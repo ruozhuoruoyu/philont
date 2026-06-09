@@ -32,6 +32,8 @@ export interface ReasoningSession {
   budgetSpent: number;
   /** Consecutive rounds that made NO net tree progress (reset on any progress). Drives stuck handling. */
   noProgressRounds: number;
+  /** Per-session opt-in: when true, the background loop auto-advances this session round-by-round. */
+  autoAdvance: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -67,6 +69,7 @@ interface SessionRow {
   root_node_id: string | null;
   budget_spent: number;
   no_progress_rounds: number;
+  auto_advance: number;
   created_at: number;
   updated_at: number;
 }
@@ -99,6 +102,7 @@ function rowToSession(r: SessionRow): ReasoningSession {
     rootNodeId: r.root_node_id,
     budgetSpent: r.budget_spent,
     noProgressRounds: r.no_progress_rounds ?? 0,
+    autoAdvance: !!r.auto_advance,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -378,6 +382,25 @@ export class ReasoningStore {
       .prepare<[string]>(`SELECT no_progress_rounds FROM reasoning_sessions WHERE id = ?`)
       .get(id) as { no_progress_rounds: number } | undefined;
     return row?.no_progress_rounds ?? 0;
+  }
+
+  /** Opt a session in/out of background auto-advance. */
+  setAutoAdvance(id: string, on: boolean): void {
+    this.db
+      .prepare<[number, number, string]>(
+        `UPDATE reasoning_sessions SET auto_advance = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(on ? 1 : 0, Date.now(), id);
+  }
+
+  /** Active sessions opted into background auto-advance (most recently updated first). */
+  listAutoAdvanceSessions(): ReasoningSession[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM reasoning_sessions WHERE status = 'active' AND auto_advance = 1 ORDER BY updated_at DESC`,
+      )
+      .all() as SessionRow[];
+    return rows.map(rowToSession);
   }
 
   /**

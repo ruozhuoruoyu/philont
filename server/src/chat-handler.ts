@@ -18,7 +18,8 @@ import {
   DEFAULT_DANGEROUS_PATTERNS,
   type ToolCheckInput,
 } from '@agent/policy';
-import type { ToolDefinition } from '@agent/policy';
+import type { ToolDefinition, ToolResult } from '@agent/policy';
+import type { ReasoningSession } from '@agent/memory';
 import {
   createToolset,
   loadSkills,
@@ -147,6 +148,7 @@ import {
 } from './task_mode_classifier.js';
 import { replyWithMediaTool } from './tools/reply_with_media.js';
 import { setConscienceLlm } from './conscience_gate.js';
+import { createAutoAdvanceLoop } from './deep_explore_autoadvance.js';
 import { semanticToolPhrase, semanticToolFailPhrase, summarizingPhrase, type PhraseLang } from './channel_phrases.js';
 import { wrapSkillToolWithReload } from './skill_install_wrapper.js';
 import { recentAttachments } from './channels/recent_attachments.js';
@@ -1477,12 +1479,15 @@ tools.registerInternal(planAndExecuteTool);
 // deep_explore tool is registered by default; skipped only when PHILONT_DEEP_EXPLORE='0' is explicitly set. Reuses miniLoopLLM +
 // subTurnToolRunner; tool subset = autonomous read-only whitelist + verification teeth (z3Verify/pariGp) ∩ registered tools.
 // z3Verify/pariGp are **not** in DEFAULT_TOOL_WHITELIST (so background autonomous cannot access them); they are explicitly included here for deep_explore.
+// Background auto-advance (Part 2) reaches the round runner through this handle; set when deep_explore
+// is enabled, read by the (default-off) auto-advance loop started further down.
+let deepExploreAdvanceSession: ((session: ReasoningSession) => Promise<ToolResult>) | null = null;
 if (process.env.PHILONT_DEEP_EXPLORE !== '0') {
   const deepExploreVerifyTools = new Set(['z3Verify', 'pariGp']);
   const readOnlyToolDefs: ToolDefinition[] = tools.list()
     .filter((t) => DEFAULT_TOOL_WHITELIST.has(t.name) || deepExploreVerifyTools.has(t.name))
     .map((t) => ({ name: t.name, description: t.description, parameters: JSON.stringify(t.schema) }));
-  const deepExploreTool = createDeepExploreTool({
+  const { tool: deepExploreTool, advanceSession: deepExploreAdvance } = createDeepExploreTool({
     reasoning: memory.reasoning,
     miniLoopLLM,
     subTurnToolRunner,
@@ -1509,6 +1514,7 @@ if (process.env.PHILONT_DEEP_EXPLORE !== '0') {
     },
   });
   tools.registerInternal(deepExploreTool);
+  deepExploreAdvanceSession = deepExploreAdvance;
   console.log('[deep-explore] enabled (on by default; set PHILONT_DEEP_EXPLORE=0 to disable)');
 }
 
@@ -1913,6 +1919,32 @@ export const autonomousLoop: AutonomousLoopHandle = startAutonomousLoop({
 });
 autonomousLoop.start();
 
+// Background auto-advance for opted-in reasoning sessions (Part 2). Default-off:
+// PHILONT_DEEP_EXPLORE_AUTO_ADVANCE gates the whole loop, and each session is opt-in via
+// deep_explore action=auto_on. When off, the loop never arms → zero behaviour change.
+export const deepExploreAutoAdvance = createAutoAdvanceLoop({
+  reasoning: memory.reasoning,
+  advanceSession: (s) =>
+    deepExploreAdvanceSession
+      ? deepExploreAdvanceSession(s)
+      : Promise.resolve({ success: false, output: '', error: 'deep_explore disabled' }),
+  runInContext: runInTurnContext,
+  notify: (text, opts) => {
+    for (const [, send] of webuiClients) send({ type: 'milestone', text });
+    if (opts?.important) {
+      void pushDispatcher
+        .enqueue({
+          severity: 'urgent',
+          kind: 'deep_explore:auto_advance',
+          targetRef: `deep_explore:auto:${Date.now()}`,
+          text,
+        })
+        .catch(() => {});
+    }
+  },
+});
+deepExploreAutoAdvance.start();
+
 const intentClassifier = process.env.LLM_PROVIDER === 'anthropic'
   ? new LLMIntentClassifier(async (prompt) => {
       const resp = await llm.send([{ role: 'user', content: prompt }]);
@@ -2256,6 +2288,7 @@ export async function closeIdleConsolidator(): Promise<void> {
 /** Shut down the autonomous loop. Idempotent. */
 export async function closeAutonomousLoop(): Promise<void> {
   await autonomousLoop.stop();
+  deepExploreAutoAdvance.stop();
 }
 
 /**

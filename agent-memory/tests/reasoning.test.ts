@@ -145,3 +145,26 @@ test('recordRoundProgress: 无进展累加 / 有进展清零(stuck 计数)', () 
   assert.equal(mem.reasoning.getSession(session.id)!.noProgressRounds, 0);
   mem.close();
 });
+
+test('setAutoAdvance / listAutoAdvanceSessions: 按 session opt-in 后台推进', () => {
+  const mem = openMemoryDb(':memory:');
+  const a = mem.reasoning.createSession({ goal: 'A', ownerSessionId: 'u' }).session;
+  const b = mem.reasoning.createSession({ goal: 'B', ownerSessionId: 'u' }).session;
+  assert.equal(a.autoAdvance, false);
+  assert.equal(mem.reasoning.listAutoAdvanceSessions().length, 0);
+
+  mem.reasoning.setAutoAdvance(a.id, true);
+  assert.equal(mem.reasoning.getSession(a.id)!.autoAdvance, true);
+  const list = mem.reasoning.listAutoAdvanceSessions();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, a.id); // only the opted-in one, not b
+
+  // 关闭后退出列表
+  mem.reasoning.setAutoAdvance(a.id, false);
+  assert.equal(mem.reasoning.listAutoAdvanceSessions().length, 0);
+  // 已闭合的 session 即使 auto=1 也不在列表(只列 active)
+  mem.reasoning.setAutoAdvance(b.id, true);
+  mem.reasoning.setSessionStatus(b.id, 'solved');
+  assert.equal(mem.reasoning.listAutoAdvanceSessions().length, 0);
+  mem.close();
+});

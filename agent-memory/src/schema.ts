@@ -15,7 +15,7 @@
 
 import type Database from 'better-sqlite3';
 
-export const SCHEMA_VERSION = 29;
+export const SCHEMA_VERSION = 30;
 
 /**
  * Canonical id for the bootstrap root pursuit. Used consistently by v7 migration and empty-DB init
@@ -972,6 +972,7 @@ function migrateV24ToV25(db: Database.Database): void {
       root_node_id      TEXT,
       budget_spent      INTEGER NOT NULL DEFAULT 0,
       no_progress_rounds INTEGER NOT NULL DEFAULT 0,
+      auto_advance      INTEGER NOT NULL DEFAULT 0,
       created_at        INTEGER NOT NULL,
       updated_at        INTEGER NOT NULL
     );
@@ -1055,6 +1056,20 @@ function migrateV28ToV29(db: Database.Database): void {
   const have = new Set(cols.map((c) => c.name));
   if (!have.has('no_progress_rounds')) {
     db.exec(`ALTER TABLE reasoning_sessions ADD COLUMN no_progress_rounds INTEGER NOT NULL DEFAULT 0`);
+  }
+}
+
+/**
+ * v29→v30: add reasoning_sessions.auto_advance — per-session opt-in flag for background auto-advance.
+ * When 1, the (default-off, flagged) background loop advances this session round-by-round on its own;
+ * the loop clears it on solved/stuck. ADD COLUMN only; skip if the table does not exist.
+ */
+function migrateV29ToV30(db: Database.Database): void {
+  if (!tableExists(db, 'reasoning_sessions')) return;
+  const cols = db.prepare(`PRAGMA table_info(reasoning_sessions)`).all() as Array<{ name: string }>;
+  const have = new Set(cols.map((c) => c.name));
+  if (!have.has('auto_advance')) {
+    db.exec(`ALTER TABLE reasoning_sessions ADD COLUMN auto_advance INTEGER NOT NULL DEFAULT 0`);
   }
 }
 
@@ -1287,6 +1302,9 @@ export function initSchema(db: Database.Database): void {
   }
   if (current < 29) {
     migrateV28ToV29(db);
+  }
+  if (current < 30) {
+    migrateV29ToV30(db);
   }
 
   // 3) Finally run partial indexes that depend on v3 new columns
