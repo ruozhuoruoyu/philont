@@ -133,3 +133,15 @@ test('owner scoping: pre-v28 NULL-owner session stays resumable by any channel (
   assert.equal(mem.reasoning.getMostRecentActiveSession('wechat:u:u')!.id, owned.id);
   mem.close();
 });
+
+test('recordRoundProgress: 无进展累加 / 有进展清零(stuck 计数)', () => {
+  const mem = openMemoryDb(':memory:');
+  const { session } = mem.reasoning.createSession({ goal: 'G', ownerSessionId: 'u' });
+  assert.equal(session.noProgressRounds, 0);
+  assert.equal(mem.reasoning.recordRoundProgress(session.id, false), 1);
+  assert.equal(mem.reasoning.recordRoundProgress(session.id, false), 2);
+  assert.equal(mem.reasoning.getSession(session.id)!.noProgressRounds, 2);
+  assert.equal(mem.reasoning.recordRoundProgress(session.id, true), 0); // progress resets
+  assert.equal(mem.reasoning.getSession(session.id)!.noProgressRounds, 0);
+  mem.close();
+});

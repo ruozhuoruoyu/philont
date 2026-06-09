@@ -30,6 +30,8 @@ export interface ReasoningSession {
   rootNodeId: string | null;
   /** Cumulative LLM token cost across turns (single-turn loop gate is PlanBudgetTracker; this is the running total) */
   budgetSpent: number;
+  /** Consecutive rounds that made NO net tree progress (reset on any progress). Drives stuck handling. */
+  noProgressRounds: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -64,6 +66,7 @@ interface SessionRow {
   owner_session_id: string | null;
   root_node_id: string | null;
   budget_spent: number;
+  no_progress_rounds: number;
   created_at: number;
   updated_at: number;
 }
@@ -95,6 +98,7 @@ function rowToSession(r: SessionRow): ReasoningSession {
     ownerSessionId: r.owner_session_id ?? null,
     rootNodeId: r.root_node_id,
     budgetSpent: r.budget_spent,
+    noProgressRounds: r.no_progress_rounds ?? 0,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -349,6 +353,31 @@ export class ReasoningStore {
         `UPDATE reasoning_sessions SET budget_spent = budget_spent + ?, updated_at = ? WHERE id = ?`,
       )
       .run(Math.max(0, Math.floor(tokens)), Date.now(), id);
+  }
+
+  /**
+   * Record whether a round made net tree progress. On progress → reset the counter to 0; on no progress
+   * → increment it. Returns the new consecutive-no-progress count (used for stuck handling). A "stuck"
+   * session is one whose counter has crossed the caller's threshold.
+   */
+  recordRoundProgress(id: string, madeProgress: boolean): number {
+    if (madeProgress) {
+      this.db
+        .prepare<[number, string]>(
+          `UPDATE reasoning_sessions SET no_progress_rounds = 0, updated_at = ? WHERE id = ?`,
+        )
+        .run(Date.now(), id);
+      return 0;
+    }
+    this.db
+      .prepare<[number, string]>(
+        `UPDATE reasoning_sessions SET no_progress_rounds = no_progress_rounds + 1, updated_at = ? WHERE id = ?`,
+      )
+      .run(Date.now(), id);
+    const row = this.db
+      .prepare<[string]>(`SELECT no_progress_rounds FROM reasoning_sessions WHERE id = ?`)
+      .get(id) as { no_progress_rounds: number } | undefined;
+    return row?.no_progress_rounds ?? 0;
   }
 
   /**

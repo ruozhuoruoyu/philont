@@ -194,6 +194,35 @@ function effectiveRoundDeadlineMs(): number {
 }
 
 /**
+ * Cross-round stuck handling. A round that makes no net tree progress increments the session's
+ * no_progress_rounds counter (reset on any progress). After STUCK_PIVOT_AFTER such rounds the round
+ * prompt forces a different approach; after STUCK_ESCALATE_AFTER the reply tells the user the frontier
+ * is stuck and suggests redirecting — instead of silently grinding the same wall round after round
+ * (observed in production: rounds 12-14 left 14 open nodes unchanged before the user gave up).
+ */
+export const STUCK_PIVOT_AFTER = (() => {
+  const n = Number(process.env.PHILONT_DEEP_EXPLORE_STUCK_PIVOT_AFTER);
+  return Number.isInteger(n) && n >= 1 ? n : 2;
+})();
+export const STUCK_ESCALATE_AFTER = (() => {
+  const n = Number(process.env.PHILONT_DEEP_EXPLORE_STUCK_ESCALATE_AFTER);
+  return Number.isInteger(n) && n >= STUCK_PIVOT_AFTER ? n : 3;
+})();
+
+/** Forceful "you are stuck — change approach" directive for the round prompt. Empty until stuck. */
+export function buildStuckDirective(noProgressRounds: number): string {
+  if (noProgressRounds < STUCK_PIVOT_AFTER) return '';
+  return (
+    `\n\n⚠️ STUCK: the last ${noProgressRounds} round(s) made NO tree progress (no new proved / dead-end / ` +
+    `decompose). Do NOT repeat the same approach or re-run the same computation. This round you MUST do one of: ` +
+    `(a) attack a frontier node with a FUNDAMENTALLY different technique than already tried (check its ` +
+    `approachesTried); (b) reason_decompose a stuck node into smaller, more tractable sub-lemmas; or (c) if a ` +
+    `node is genuinely unreachable, reason_record it as a dead_end to prune the frontier. Make at least one ` +
+    `concrete tree commit (reason_decompose or reason_record) this round.`
+  );
+}
+
+/**
  * No-progress early-stop threshold. A round otherwise runs to its full wall-clock cap even when
  * spinning — the prompt pushes "always advance the tree", so the model rarely returns plain text
  * and the loop only ends on the deadline. A round that just fails pariGp / computes endlessly /
@@ -1408,12 +1437,13 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
     const frontierStartIds = new Set(computeFrontier(before).map((n) => n.id));
     const systemPrompt = renderTreePrompt(session, before, collectComputeLessons(skills));
     const userMessage =
-      before.length <= 1
+      (before.length <= 1
         ? `${session.goal}\n\n[FRESH session — only the root node exists.] Your FIRST action MUST be ` +
           `reason_decompose, splitting the root proposition into 2–5 concrete subgoals/lemmas. Do NOT run ` +
           `pariGp or any computation before the root is decomposed — a round that only computes without ` +
           `committing to the tree wastes the entire time budget and will be cut short.`
-        : 'Continue advancing the current reasoning tree; prefer the most promising open node on the frontier.';
+        : 'Continue advancing the current reasoning tree; prefer the most promising open node on the frontier.') +
+      buildStuckDirective(session.noProgressRounds ?? 0);
 
     // Proactive heads-up partway through the round so a long round does not end "silently":
     // tell the user it is approaching the per-round time cap and will wrap up & save soon.
@@ -1472,6 +1502,13 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
       reasoning.incrementVisits(session.id, stillOpen);
     }
     const summary = summarizeProgress(before, after);
+    // Cross-round stuck tracking: did this round make any net tree progress?
+    const madeProgress =
+      summary.newlyProved.length > 0 ||
+      summary.newlyRefuted.length > 0 ||
+      summary.newDeadEnds.length > 0 ||
+      summary.decomposedInto > 0;
+    const noProgressRounds = reasoning.recordRoundProgress(session.id, madeProgress);
     // Post-loop convergence judgment (sub-LLM is not given reason_close).
     const status = judgeConvergence(after);
     if (status !== 'active') reasoning.setSessionStatus(session.id, status);
@@ -1486,7 +1523,13 @@ export function createDeepExploreTool(deps: DeepExploreDeps): Tool {
             ? `\n(this round hit the ${Math.round(roundDeadlineMs / 60_000)}-minute time cap; tree saved — reply "continue" to keep going)`
             : '\n(this round was aborted; tree saved, you can continue)'
         : '';
-    return { success: true, output: `${text}${tail}\nsession id: ${session.id}` };
+    // After enough stuck rounds, escalate to the user instead of grinding the same frontier silently.
+    const stuckNote =
+      status === 'active' && !madeProgress && noProgressRounds >= STUCK_ESCALATE_AFTER
+        ? `\n⚠️ No progress for ${noProgressRounds} consecutive rounds — this frontier looks stuck. ` +
+          `Consider redirecting: start a fresh angle (a different framing of the problem), or tell me which sub-problem to focus on.`
+        : '';
+    return { success: true, output: `${text}${tail}${stuckNote}\nsession id: ${session.id}` };
   }
 
   // Experimental-math (explore) round: compute first, then conjecture. Reuses the same

@@ -15,7 +15,7 @@
 
 import type Database from 'better-sqlite3';
 
-export const SCHEMA_VERSION = 28;
+export const SCHEMA_VERSION = 29;
 
 /**
  * Canonical id for the bootstrap root pursuit. Used consistently by v7 migration and empty-DB init
@@ -971,6 +971,7 @@ function migrateV24ToV25(db: Database.Database): void {
       owner_session_id  TEXT,
       root_node_id      TEXT,
       budget_spent      INTEGER NOT NULL DEFAULT 0,
+      no_progress_rounds INTEGER NOT NULL DEFAULT 0,
       created_at        INTEGER NOT NULL,
       updated_at        INTEGER NOT NULL
     );
@@ -1039,6 +1040,21 @@ function migrateV27ToV28(db: Database.Database): void {
   const have = new Set(cols.map((c) => c.name));
   if (!have.has('owner_session_id')) {
     db.exec(`ALTER TABLE reasoning_sessions ADD COLUMN owner_session_id TEXT`);
+  }
+}
+
+/**
+ * v28→v29: add reasoning_sessions.no_progress_rounds — a cross-round counter of consecutive rounds
+ * that made NO net tree progress (no new proved/refuted/dead_end, no decompose). Drives stuck handling:
+ * after a few stuck rounds the round prompt forces a pivot, and the reply escalates to the user instead
+ * of grinding the same frontier. ADD COLUMN only; skip if the table does not exist.
+ */
+function migrateV28ToV29(db: Database.Database): void {
+  if (!tableExists(db, 'reasoning_sessions')) return;
+  const cols = db.prepare(`PRAGMA table_info(reasoning_sessions)`).all() as Array<{ name: string }>;
+  const have = new Set(cols.map((c) => c.name));
+  if (!have.has('no_progress_rounds')) {
+    db.exec(`ALTER TABLE reasoning_sessions ADD COLUMN no_progress_rounds INTEGER NOT NULL DEFAULT 0`);
   }
 }
 
@@ -1268,6 +1284,9 @@ export function initSchema(db: Database.Database): void {
   }
   if (current < 28) {
     migrateV27ToV28(db);
+  }
+  if (current < 29) {
+    migrateV28ToV29(db);
   }
 
   // 3) Finally run partial indexes that depend on v3 new columns

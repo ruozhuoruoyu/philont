@@ -30,6 +30,7 @@ import {
   parseAssessments,
   normalizeTechnique,
   scoreFrontierValues,
+  buildStuckDirective,
   buildDiscoverPrompt,
   createDeepExploreTool,
 } from '../src/deep_explore.js';
@@ -688,4 +689,12 @@ test('PARI/GP primer 含 sum/for 区间迭代规则(止血 gp-args "too few argu
   const p = buildDiscoverPrompt(session, mem.reasoning.getNodes(session.id), 'seed');
   assert.match(p, /sum\(i=1, #V/);          // the correct range-iteration idiom is taught
   assert.match(p, /too few arguments/);     // names the exact recurring error
+});
+
+test('buildStuckDirective: 未到阈值为空,达到阈值强制换路', () => {
+  assert.equal(buildStuckDirective(0), '');
+  assert.equal(buildStuckDirective(1), ''); // STUCK_PIVOT_AFTER default = 2
+  assert.match(buildStuckDirective(2), /STUCK/);
+  assert.match(buildStuckDirective(2), /FUNDAMENTALLY different technique|reason_decompose|dead_end/);
+  assert.match(buildStuckDirective(4), /4 round/);
 });
