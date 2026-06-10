@@ -1,67 +1,64 @@
 # @agent/launcher
 
-Philont 的 **supervisor**(常驻管理进程)。它是"浏览器 + 小 launcher"打包形态的地基:
+Philont's **supervisor** (a long-lived management process). It is the foundation of the "browser + small launcher" packaging form:
 
-- 在 `PHILONT_LAUNCHER_PORT`(默认 **20267**)上 serve 控制面 API + 打包好的 web-ui;
-- 读写权威配置文件 `~/.philont/.env`(密钥掩码、保留用户注释);
-- 以子进程方式 **启动 / 停止 / 重启** agent server(`@agent/server`),崩溃自动退避重拉;
-- 启动时:配置齐(有 `ANTHROPIC_API_KEY`)→ 拉起 agent;否则停在"待配置",等前端填完。
+- serves the control-plane API + the bundled web-ui on `PHILONT_LAUNCHER_PORT` (default **20267**);
+- reads/writes the authoritative config file `~/.philont/.env` (masks secrets, preserves user comments);
+- **starts / stops / restarts** the agent server (`@agent/server`) as a child process, with automatic backoff-and-relaunch on crash;
+- on startup: if configured (an `ANTHROPIC_API_KEY` is present) → launch the agent; otherwise it stays in "awaiting configuration" until the front end fills it in.
 
-launcher 自己活得比 agent 久,所以"改完配置一键重启"成立 —— 重启只是杀子进程重拉,配置页面不掉线。
+The launcher outlives the agent, which is what makes "edit the config, one-click restart" work — a restart just kills and relaunches the child process; the config page never drops.
 
-## 运行
+## Run
 
 ```bash
 cd launcher
 npm install
-npm run dev      # tsx src/index.ts(开发)
-# 或 npm run build && npm start
+npm run dev      # tsx src/index.ts (development)
+# or: npm run build && npm start
 ```
 
-打开 `http://localhost:20267`。首次无 key 时会提示去 web-ui 配置(web-ui 设置面板见阶段 2)。
+Open `http://localhost:20267`. On first run with no key, it prompts you to configure via the web-ui (the settings panel; see Phase 2).
 
-## 控制面 API
+## Control-plane API
 
-| 方法 | 路径 | 说明 |
+| Method | Path | Description |
 |------|------|------|
-| GET  | `/api/launcher/status`  | agent 运行态:state / pid / port / uptime / recentLogs / configured |
-| GET  | `/api/launcher/config`  | 当前配置(密钥掩码为 `••••后4位`) |
-| PUT  | `/api/launcher/config`  | 写配置 `{values:{KEY:val}}`;回传掩码值会跳过,不覆盖真实密钥;校验失败返回 400 |
-| POST | `/api/launcher/start`   | 启动 agent(未配置返回 409) |
-| POST | `/api/launcher/stop`    | 优雅停止(SIGTERM,超时 SIGKILL) |
-| POST | `/api/launcher/restart` | 停 → 启(配置变更后调用) |
-| GET  | `/api/launcher/logs`    | agent 最近日志 |
+| GET  | `/api/launcher/status`  | agent runtime state: state / pid / port / uptime / recentLogs / configured |
+| GET  | `/api/launcher/config`  | current config (secrets masked as `••••last4`) |
+| PUT  | `/api/launcher/config`  | write config `{values:{KEY:val}}`; a returned masked value is skipped (does not overwrite the real secret); a validation failure returns 400 |
+| POST | `/api/launcher/start`   | start the agent (returns 409 if not configured) |
+| POST | `/api/launcher/stop`    | graceful stop (SIGTERM, then SIGKILL on timeout) |
+| POST | `/api/launcher/restart` | stop → start (called after a config change) |
+| GET  | `/api/launcher/logs`    | the agent's recent logs |
 
-## 环境变量(均可选,有合理默认)
+## Environment variables (all optional, with sensible defaults)
 
-| 变量 | 默认 | 说明 |
+| Variable | Default | Description |
 |------|------|------|
-| `PHILONT_LAUNCHER_PORT` | `20267` | launcher 自身端口 |
-| `PHILONT_HOME`          | `~/.philont` | 配置 + 运行时数据目录 |
-| `PHILONT_ENV_FILE`      | `$PHILONT_HOME/.env` | 权威配置文件;launcher spawn agent 时注入,agent 的 load-env 据此读取 |
-| `PHILONT_SERVER_DIR`    | `../server` | agent server 包目录(打包后可覆盖) |
-| `PHILONT_WEBUI_DIR`     | `../web-ui/dist` | web-ui 构建产物目录 |
-| `PHILONT_NO_OPEN` / `PHILONT_OPEN_BROWSER=0` | — | 关闭启动时自动打开浏览器 |
-| `PHILONT_DESKTOP_SHORTCUT=0` | — | 关闭创建桌面 / 应用菜单快捷方式 |
+| `PHILONT_LAUNCHER_PORT` | `20267` | the launcher's own port |
+| `PHILONT_HOME`          | `~/.philont` | config + runtime data directory |
+| `PHILONT_ENV_FILE`      | `$PHILONT_HOME/.env` | authoritative config file; the launcher injects it when spawning the agent, and the agent's load-env reads from it |
+| `PHILONT_SERVER_DIR`    | `../server` | the agent server package directory (overridable after packaging) |
+| `PHILONT_WEBUI_DIR`     | `../web-ui/dist` | the web-ui build output directory |
+| `PHILONT_NO_OPEN` / `PHILONT_OPEN_BROWSER=0` | — | disable auto-opening the browser on startup |
+| `PHILONT_DESKTOP_SHORTCUT=0` | — | disable creating a desktop / app-menu shortcut |
 
-## 与 agent server 的契约
+## Contract with the agent server
 
-launcher spawn agent 时:`cwd = serverDir`(供模块解析),并注入 `PHILONT_ENV_FILE` 与
-`PHILONT_PORT`。agent 的 `server/src/load-env.ts` 认 `PHILONT_ENV_FILE` → 读 `~/.philont/.env`;
-不设时退回原有"读 cwd/.env"行为,直跑 `tsx src/index.ts` 的开发流程不受影响。
+When the launcher spawns the agent: `cwd = serverDir` (for module resolution), and it injects `PHILONT_ENV_FILE` and `PHILONT_PORT`. The agent's `server/src/load-env.ts` honors `PHILONT_ENV_FILE` → reads `~/.philont/.env`; when unset it falls back to the original "read cwd/.env" behavior, so the plain `tsx src/index.ts` development flow is unaffected.
 
-## 状态(2026-06)
+## Status (2026-06)
 
-- 阶段 1 ✓ 控制面 + 进程监督 + 配置读写校验。
-- 阶段 2 ✓ web-ui 设置面板 + 首次向导 + 状态灯/重启 + 同源/局域网地址解析。
-- 阶段 3 ✓ 启动自动打开浏览器(headless 自动跳过)+ 桌面/应用菜单快捷方式(只创建一次)。
-  系统托盘**留到阶段 4**:需跨平台原生 helper(systray 类库要打包一个 Go/原生二进制),
-  且无法在无显示环境验证,故先用"快捷方式 + 自动打开"补可发现性。
-- 阶段 4(进行中):
-  - ✓ 可选能力检测(`GET /api/launcher/capabilities`:python/z3/playwright)+ 设置面板「系统」区展示。
-  - ✓ 开机自启(`GET|POST /api/launcher/autostart`:linux XDG / mac LaunchAgent / win 启动文件夹)+ 面板开关。
-  - ✓ 装配脚本 `scripts/assemble.mjs`(构建 + staging 到 dist-app,~14M app 层)。
-  - ✓ 打包策略文档 `../PACKAGING.md`(含 z3 等可选能力不进基础包的决策)。
-  - 待真机:各平台安装包(NSIS/.pkg/AppImage)+ 系统托盘(需原生 helper)+ 卸载器。
+- Phase 1 ✓ control plane + process supervision + config read/write + validation.
+- Phase 2 ✓ web-ui settings panel + first-run wizard + status light/restart + same-origin/LAN address resolution.
+- Phase 3 ✓ auto-open the browser on startup (skipped in headless) + desktop/app-menu shortcut (created once).
+  System tray is **deferred to Phase 4**: it needs a cross-platform native helper (a systray library has to bundle a Go/native binary), and it can't be verified in a headless environment, so for now "shortcut + auto-open" covers discoverability.
+- Phase 4 (in progress):
+  - ✓ optional-capability detection (`GET /api/launcher/capabilities`: python/z3/playwright) + display in the settings panel's "System" section.
+  - ✓ start-on-boot (`GET|POST /api/launcher/autostart`: linux XDG / mac LaunchAgent / win Startup folder) + a panel toggle.
+  - ✓ assembly script `scripts/assemble.mjs` (build + stage to dist-app, ~14M app layer).
+  - ✓ packaging-strategy doc `../PACKAGING.md` (incl. the decision to keep optional capabilities like z3 out of the base package).
+  - Pending real-hardware testing: per-platform installers (NSIS/.pkg/AppImage) + system tray (needs a native helper) + uninstaller.
 
-打包形态约定见 `../PACKAGING.md`。
+See `../PACKAGING.md` for the packaging-form conventions.

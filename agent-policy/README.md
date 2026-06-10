@@ -1,8 +1,8 @@
 # @agent/policy
 
-Policy 层：权限检查 + 审计日志
+Policy layer: permission checks + audit log
 
-## 3x3 权限矩阵
+## 3×3 permission matrix
 
 ```
          local   network   system
@@ -11,7 +11,7 @@ write      ✓        ✗        ✗
 execute    ✗        ✗        ✗
 ```
 
-## 使用方式
+## Usage
 
 ```typescript
 import { withPolicy, createDefaultMatrix, AuditLog } from '@agent/policy';
@@ -24,14 +24,14 @@ const delegate = withPolicy(yourDelegate, {
 });
 ```
 
-## 内置工具
+## Built-in tools
 
 - `readFile` - read + local
 - `writeFile` - write + local
 - `http` - read + network
-- `shell` - execute + local (默认拒绝)
+- `shell` - execute + local (denied by default)
 
-## 运行演示
+## Run the demo
 
 ```bash
 cd demo
