@@ -7,3 +7,4 @@ export { processTool } from './process.js';
 export { z3VerifyTool } from './z3.js';
 export { pariGpTool } from './gp.js';
 export { magnitudeTool } from './magnitude.js';
+export { lemmaLookupTool, ANALYTIC_LEMMAS } from './lemma_library.js';

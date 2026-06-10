@@ -9,8 +9,29 @@ import assert from 'node:assert/strict';
 import {
   evaluateHonesty,
   findCompletionClaim,
+  findOrderClaim,
   classifyToolResult,
 } from '../src/index.js';
+
+// ── findOrderClaim (estimate-honesty: asymptotic/quantitative bound assertions) ──────────────
+
+test('findOrderClaim: Landau-with-comparison fires', () => {
+  assert.ok(findOrderClaim('therefore the minor arc integral = o(N)'));
+  assert.ok(findOrderClaim('we get ∫_m |S|² ≤ O(N^2) on the minor arcs'));
+  assert.ok(findOrderClaim('|Σ Λ(n) e(nα)| ≪ N^{3/2} (log N)^4'));
+});
+
+test('findOrderClaim: estimate/error context fires (zh + en)', () => {
+  assert.ok(findOrderClaim('于是误差项小于 N/(log N)^A,主项保持'));
+  assert.ok(findOrderClaim('the error terms balance and cancel'));
+  assert.ok(findOrderClaim('劣弧估计 o(N²) 成立'));
+});
+
+test('findOrderClaim: casual Landau in prose does NOT fire (no false positive)', () => {
+  assert.equal(findOrderClaim('we use an O(n log n) sorting algorithm here'), null);
+  assert.equal(findOrderClaim('the proof proceeds by induction on n, base case n=1'), null);
+  assert.equal(findOrderClaim('this lemma follows from the pigeonhole principle'), null);
+});
 
 // ── classifyToolResult ─────────────────────────────────────────────────
 

@@ -261,6 +261,7 @@ export {
 export {
   evaluateHonesty,
   findCompletionClaim,
+  findOrderClaim,
   classifyToolResult,
 } from './honesty_gate.js';
 export type { HonestyEvaluation, EvaluateOptions as HonestyEvaluateOptions } from './honesty_gate.js';

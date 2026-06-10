@@ -316,6 +316,34 @@ export function findReasoningTerminalClaim(text: string): string | null {
   return null;
 }
 
+/**
+ * Asymptotic / quantitative ESTIMATE claims — the analytic-proof analogue of a completion claim.
+ * An LLM doing hard analysis asserts bounds ("∫_m |S|² = o(N)", "the error terms balance", "≪ N^{3/2}")
+ * that it has NOT actually verified — the same failure class the magnitude tool exists to remove.
+ * Used by deep_explore to flag a node recorded "proved" on an order claim with no machine check behind it.
+ * Tight enough to avoid firing on casual Landau notation: an order symbol must sit in a CLAIM context
+ * (after =/≤/"bounded by", or attached to error/estimate/minor-arc), and ≪ (Vinogradov) is itself a claim.
+ */
+const ORDER_CLAIM_PATTERNS: ReadonlyArray<RegExp> = [
+  /[=≤<]\s*[oO]\s*\(\s*[A-Za-z]/, //  = o(N) , ≤ O(N…
+  /\b(?:is|=|≤|<=|bounded by|至多|不超过|小于等于)\s*[oO]\(/i,
+  /≪|⪡|\\ll\b/, // Vinogradov "much less than" — itself an estimate assertion
+  /(?:误差|余项|主项|劣弧|error|minor[\s-]?arc|major[\s-]?arc)[^。！？\n]{0,18}(?:[=≤<]\s*|小于|≪|o\(|O\()/i,
+  /(?:估计|界|estimate|bound)[^。！？\n]{0,14}(?:o\(|O\(|≪|<\s*N|≤\s*N|小于)/i,
+  /(?:误差项?|error\s*terms?)[^。！？\n]{0,18}(?:平衡|相消|抵消|cancel|balance)/i,
+];
+
+export function findOrderClaim(text: string): string | null {
+  for (const re of ORDER_CLAIM_PATTERNS) {
+    const m = re.exec(text);
+    if (m) {
+      const at = m.index;
+      return text.slice(Math.max(0, at - 12), at + 40).trim().slice(0, 60);
+    }
+  }
+  return null;
+}
+
 export function findRoundResultClaim(text: string): string | null {
   for (const re of REASONING_ROUND_RESULT_PATTERNS) {
     const m = re.exec(text);

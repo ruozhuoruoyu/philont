@@ -68,6 +68,7 @@ import {
 import {
   ReasoningNodeNotFoundError,
   extractFailureSignature,
+  findOrderClaim,
   type ReasoningStore,
   type ReasoningSession,
   type ReasoningNode,
@@ -409,6 +410,7 @@ export const DEEP_EXPLORE_RESEARCH_ALLOW: ReadonlySet<string> = new Set([
   'z3Verify',
   'pariGp',
   'magnitude',
+  'lemmaLookup',
 ]);
 
 // ── Pure functions (independently testable) ─────────────────────────────────────────────────────
@@ -540,6 +542,20 @@ function recordSessionToolFailure(sessionId: string, toolName: string, error: st
   while (buf.length > RECENT_TOOL_FAILURES_MAX) buf.shift();
   sessionToolFailures.set(sessionId, buf);
 }
+/**
+ * Estimate-honesty tracking: which sessions have actually run a VERIFICATION tool (magnitude / z3 / gp)
+ * at least once. A reasoning session that records a node "proved" on an asymptotic/quantitative ESTIMATE
+ * claim but has NEVER machine-checked anything is the analytic-proof fabrication pattern (the Goldbach
+ * failure mode — asserting bounds it didn't earn). We don't hard-block (advisory, fail-open), but we
+ * annotate the recorded result with a caveat so it can't masquerade as a verified lemma downstream.
+ * In-memory, process-scoped; once a session verifies once we stop nagging it (low false-positive).
+ */
+const sessionVerifierUsed = new Set<string>();
+const VERIFIER_TOOLS = new Set(['magnitude', 'z3Verify', 'pariGp']);
+const ESTIMATE_CAVEAT =
+  '  [⚠ unverified estimate — this order/bound claim was recorded without any machine check this session; ' +
+  'confirm the composition with magnitude(action="closes") / z3Verify / pariGp before relying on it as a lemma]';
+
 /** Prompt lines warning the model off its own recent pariGp/z3 mistakes this session (empty if none). */
 function renderRecentToolFailures(sessionId: string): string[] {
   const buf = sessionToolFailures.get(sessionId);
@@ -670,6 +686,7 @@ export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode
   lines.push('- z3Verify(smtlib): **external check** — use the Z3 solver to rigorously verify a decidable/bounded/arithmetic subclaim or find a counterexample.');
   lines.push('- pariGp(script): **external computation** — use PARI/GP for number-theory/algebra computation and counterexample search (factoring, primality certificates, elliptic curves, enumeration, concrete values). Prefer it over z3 for number theory. Use print() to output your conclusion.');
   lines.push('- magnitude(action, …): **asymptotic order-of-growth algebra** — do NOT track magnitudes like N^(3/2)·(log N)^-A in your head (you WILL slip). action="compare" decides X=o(Y)/O(Y); action="closes" takes a target + a sum of bounds (terms[]) and decides whether they compose to beat it — and with free parameters {A,B,κ,…} whether a choice EXISTS that closes it (returns a witness, or the binding obstruction). This is how you settle an "estimates balance" / parameter-choice step rigorously instead of hand-waving.');
+  lines.push('- lemmaLookup(query): **retrieve a standard estimate instead of mis-remembering it** — precise hypotheses + magnitude + the common MISUSE for the classic tools (PNT/Parseval weights, Vinogradov minor-arc sup, sup×mean-square arc integrals, Siegel–Walfisz moduli range, decoupling/BDG applicability, large sieve, …). Each card\'s magnitude is in `magnitude`-tool syntax, so look it up then feed the shape into a closure check. Empty query lists the index.');
   lines.push('- memory-recall tools (searchNotes/getFact/readFile, etc.): **auxiliary only** — to recall your own earlier conclusions/computations, not a substitute for reasoning.');
   lines.push('');
   lines.push('## How to reason (discipline)');
@@ -1251,10 +1268,17 @@ export function makeReasoningToolRunner(
     if (name === 'reason_record') {
       const nodeId = typeof input.nodeId === 'string' ? input.nodeId : '';
       const status = input.status as string;
-      const result = typeof input.result === 'string' ? input.result : null;
+      let result = typeof input.result === 'string' ? input.result : null;
       const approach = typeof input.approach === 'string' ? input.approach : undefined;
       if (!RECORD_STATUSES.has(status)) {
         return { ok: false, output: '', error: `status must be proved/refuted/dead_end, got ${String(status)}` };
+      }
+
+      // Estimate-honesty gate (advisory): a node recorded "proved" on an asymptotic/quantitative ESTIMATE
+      // claim, in a session that has never run a verification tool, is annotated as unverified so it can't
+      // pass downstream as a checked lemma. Fail-open — never blocks; just attaches the caveat once.
+      if (status === 'proved' && result && !sessionVerifierUsed.has(sessionId) && findOrderClaim(result)) {
+        result += ESTIMATE_CAVEAT;
       }
 
       // proved + adversarial verification enabled → run refutation review before committing to DB.
@@ -1308,8 +1332,10 @@ export function makeReasoningToolRunner(
       return { ok: true, output: `Recorded [${nodeId}] = ${status}${result ? `: ${result}` : ''}` };
     }
 
-    // Delegate everything else (read-only research tools + verify teeth z3Verify/pariGp).
+    // Delegate everything else (read-only research tools + verify teeth z3Verify/pariGp/magnitude).
     const result = await delegate(name, input);
+    // Estimate-honesty: a successful verification call clears the session's "never verified" flag.
+    if (result.ok && VERIFIER_TOOLS.has(name)) sessionVerifierUsed.add(sessionId);
     // Surface verify-tool failures to the operator log — otherwise a broken pariGp (gp missing,
     // spawn error, timeout, bad script) is silent except for a "⚠ pariGp" status ping, and the
     // computational verification quietly never works. The full error stays in the sub-LLM's tool_result.
