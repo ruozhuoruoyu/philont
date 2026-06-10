@@ -13,7 +13,7 @@ This guide covers three ways to run Philont:
 
 > ### ⚠️ Platform status — please read first
 >
-> philont is developed and **tested on Windows only**. macOS and Linux are **adapted in the code**
+> Philont is developed and **tested on Windows only**. macOS and Linux are **adapted in the code**
 > (OS-specific paths, shells, and native modules are branched per platform) but have **not been tested
 > by the author** — expect rough edges. The runtime is cross-platform in principle; it just hasn't had
 > real mileage outside Windows yet. If you run it on macOS/Linux, please open an issue or PR — whether
@@ -55,7 +55,7 @@ brew install python           # Python 3 — the Xcode CLT no longer ship it
 
 ### Optional — only for specific features
 
-None of these are needed to boot philont. Install one only if you use the matching feature; without it,
+None of these are needed to boot Philont. Install one only if you use the matching feature; without it,
 the tool returns a clear "not installed" error rather than crashing.
 
 | Feature | Needs | Install |
@@ -214,7 +214,7 @@ localhost, treat the following as required, not optional:
      listen 443 ssl;
      server_name philont.example.com;
      # ssl_certificate / ssl_certificate_key ...
-     auth_basic "philont";
+     auth_basic "Philont";
      auth_basic_user_file /etc/nginx/.htpasswd;
      location / {
        proxy_pass http://127.0.0.1:20266;
