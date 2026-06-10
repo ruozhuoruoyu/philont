@@ -2,14 +2,21 @@
 
 Policy layer: permission checks + audit log
 
-## 3×3 permission matrix
+## 3×4 permission matrix
+
+Capability (read / write / execute) × domain (local / network / system / **self**). The `self`
+domain is the agent's own state (memory, skills, calendar) — mutations there don't spill outside
+the agent. `createDefaultMatrix()`:
 
 ```
-         local   network   system
-read       ✓        ✓        ✗
-write      ✓        ✗        ✗
-execute    ✗        ✗        ✗
+         local   network   system   self
+read       ✓        ✓         ✗       ✓
+write      ✓        ✗         ✗       ✓
+execute    ✗        ✗         ✗       ✗
 ```
+
+The server runs the stricter `createReadOnlyMatrix()` (same, but **external writes are denied** —
+`write` is allowed only on `self`); `execute` and `system` always require explicit approval.
 
 ## Usage
 
