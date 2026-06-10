@@ -8,7 +8,7 @@
 [![Bring your own model](https://img.shields.io/badge/LLM-bring%20your%20own-7c3aed.svg)](#configuration)
 [![~100× cheaper](https://img.shields.io/badge/cost-~100%C3%97%20cheaper%20per%20token-16a34a.svg)](#why-a-cheap-model-is-enough)
 
-Philont is a self-hostable AI agent that has personality, drives its own learning, and reasons through hard problems step by step. Most open-source agents — OpenClaw, Hermes, and the rest — are **task runners**: you hand them a job, they execute it, they stop. Philont is built to be something else: a **being** — an agent with an independent character, intrinsic curiosity, and a compulsion to understand before it acts. It grows with every session, teaches itself from failure, and never pretends to have succeeded when it hasn't.
+Philont is a self-hostable AI agent that has personality, drives its own learning, and reasons through hard problems step by step. Most open-source agents — [OpenClaw](https://github.com/openclaw/openclaw), [Hermes](https://github.com/NousResearch/hermes-agent), and the rest — are **task runners**: powerful at carrying out what you ask, but tools all the same. Philont is built to be something else: a **being** — an agent with an independent character, intrinsic curiosity, and a compulsion to understand before it acts. It grows with every session, teaches itself from failure, and never pretends to have succeeded when it hasn't.
 
 Concretely, that means: a **5-layer memory** it carries across every session and channel; a **deductive proof engine** (`deep_explore`) that cracks hard problems by *reasoning*, not by summarising the web; **intrinsic drives** that research and self-review while you're away; mechanism-enforced **honesty** and **plan → review → execute** rigor; a **permission matrix + audit log** on every tool call; **MCP** for any external capability; and one process that reaches you on **WeChat, Telegram, a web UI, or a headless CLI**.
 
@@ -23,11 +23,11 @@ The open-source agent field competes on cost-per-token, tool count, and integrat
 | | OpenClaw | Hermes | **Philont** |
 |---|:---:|:---:|:---:|
 | Core model | extrinsic task runner | task runner + learning loop | **autonomous being with intrinsic drives** |
-| Acts on its own initiative | ❌ | ⚠️ scheduled cron | ✅ curiosity · pursuit · commitment drives |
+| Acts on its own initiative | ⚠️ scheduled | ⚠️ scheduled cron | ✅ curiosity · pursuit · commitment drives |
 | Self-learning from its own **failures** | ❌ | ⚠️ learns from successful runs, not failures | ✅ failure notes · anti-patterns · **honesty gates against pretended success** |
 | Step-by-step deep reasoning | ❌ | ❌ | ✅ `deep_explore` conjecture loop |
 | Built-in permission / audit layer | command allowlist | command approval | ✅ 3×4 capability matrix · validator chain · SHA-256 audit log |
-| Runs complex tasks on a **cheap** model | needs a strong model | needs a strong model | ✅ **DeepSeek V4 Flash — ~100× cheaper** |
+| Runs complex tasks on a **cheap** model | ⚠️ leans on a strong model for hard tasks | ⚠️ leans on a strong model for hard tasks | ✅ **DeepSeek V4 Flash — ~100× cheaper** |
 | BYOK / model freedom | ✅ | ✅ | ✅ |
 | Persistent cross-session memory | ✅ | ✅ | ✅ 5-layer (timeline · actions · FTS notes · facts · skills) |
 | Lives across channels (WeChat / Telegram / …) | ✅ | ✅ | ✅ |
@@ -249,7 +249,7 @@ Philont stands on the shoulders of two open-source agents we genuinely admire �
 - our Telegram gateway approach is informed by Hermes' Telegram platform → `server/src/channels/telegram/client.ts`;
 - our tool-call parser handles the `<tool_call>` tag format used by Hermes / Nous models → `server/src/llm-adapter.ts`.
 
-**OpenClaw.** We learned from OpenClaw too:
+**[OpenClaw](https://github.com/openclaw/openclaw).** We learned from OpenClaw too:
 - our path-ACL workspace-root resolution is modeled on OpenClaw's `media-tool-shared.ts` → `agent-policy/src/validators/pathAcl.ts`;
 - Philont's skills loader is **compatible with the OpenClaw / `clawhub` skill convention** (`<workdir>/skills/`), so skills installed the OpenClaw way work in Philont unchanged → `agent-tools/src/skills/loader.ts`.
 
