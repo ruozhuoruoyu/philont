@@ -1,7 +1,7 @@
 ---
 name: goal-driven-execution
-description: 接到不明确的任务时,先把它转成"做完长什么样 + 怎么验证"再开始动手;同一 turn 内做完后用工具核验,而不是凭感觉宣布完成。
-when_to_use: 任务模糊或目标不清(用户只说大方向);多步骤任务执行前需要拆分目标 + 验证标准;agent 容易"做了一部分就宣布完成"的场景;用户说"把 X 弄一下 / 帮我处理 Y"这种不明确请求
+description: When given an ambiguous task, first translate it into "what does done look like + how to verify" before starting; after finishing within the same turn, verify with tools rather than declaring completion by gut feeling.
+when_to_use: Task is vague or goal is unclear (user only gave a high-level direction); multi-step task needs goal decomposition + acceptance criteria before execution; scenarios where the agent tends to "finish part of it and declare done"; user says something like "clean up X / help me deal with Y" — underspecified requests
 version: 1.0.0
 ---
 
@@ -9,71 +9,71 @@ version: 1.0.0
 
 ## When to Use
 
-任意以下场景:
+Any of the following scenarios:
 
-- 用户给的任务**模糊**("帮我搞下 X" / "优化一下" / "改进 Y")
-- 任务有**多个合理终态**("加点测试" → 1 个还是 50 个?覆盖到哪种边界?)
-- 任务**看似简单但有副作用**("把这段代码改成异步" → 谁调用它?调用方都得改吗?)
-- 即将**宣布完成**("已完成" / "OK" / "done") —— 此时必须先核验
+- The task the user gave is **vague** ("sort out X" / "optimize this" / "improve Y")
+- The task has **multiple plausible end states** ("add some tests" → 1 or 50? What edge-case boundary?)
+- The task **looks simple but has side effects** ("make this code async" → who calls it? Do all callers need updating?)
+- About to **declare completion** ("done" / "OK" / "finished") — must verify first
 
-## 核心三步
+## Core Three Steps
 
-### 1. 转任务 → 成功标准
+### 1. Convert task → success criteria
 
-收到任务后,先在脑内/文本中回答 3 个问题:
+After receiving a task, first answer 3 questions in your head or in text:
 
 ```
-- 这件事 *做完* 长什么样?(具体到能 grep / curl / test 的程度)
-- 哪些是必须的(must),哪些是 nice-to-have?
-- 失败 mode 是什么?哪些情况下我应该停下问用户?
+- What does this look like when it's *done*? (specific enough to grep / curl / test)
+- What is must-have vs. nice-to-have?
+- What are the failure modes? In what situations should I stop and ask the user?
 ```
 
-**❌ 反例**:
-> 用户:"加点测试"
-> agent: 直接开始写测试 → 写了 50 个边界 case → 用户:"我只是想要一个 happy path"
+**❌ Anti-example**:
+> User: "add some tests"
+> agent: starts writing tests directly → writes 50 edge cases → user: "I just wanted one happy path"
 
-**✅ 正例**:
-> 用户:"加点测试"
-> agent: "我会先加 happy path 单元测试,边界 case 留 TODO 注释让你看了再决定要不要补,行不行?"
+**✅ Good example**:
+> User: "add some tests"
+> agent: "I'll add a happy-path unit test first; I'll leave edge cases as TODO comments for you to decide whether to fill in — sound good?"
 
-> 用户:"如果你不确定就直接做 happy path 就行" ← 用户授权后再开始
+> User: "if you're unsure just do the happy path" ← start only after user authorizes
 
-### 2. 干活时,把"成功标准"挂在脑前
+### 2. While working, keep "success criteria" front of mind
 
-每写一行代码,都问:**这一行让我离成功标准更近,还是只是看起来在动?**
+For every line of code written, ask: **does this line bring me closer to the success criteria, or does it just look like progress?**
 
-如果答案是后者 → 停下,别加。这是 philont CLAUDE.md 里"Don't add features beyond what the task requires"的具体执行步骤。
+If the answer is the latter → stop, don't add it. This is the concrete execution step for the "Don't add features beyond what the task requires" principle in philont CLAUDE.md.
 
-### 3. 完成前,**用工具核验**(不是凭感觉)
+### 3. Before declaring done, **verify with tools** (not by gut feel)
 
-宣布完成前必须用工具自证。**HonestyGate 已经实装了一道运行时拦截**(完成宣言 vs ✓/⚠ tool markers 不一致 → 强制重生),**但靠 gate 兜底是失败时的 last line of defense,不应该是日常依赖**。
+Must use tools to self-verify before declaring completion. **HonestyGate already has a runtime intercept in place** (completion claim vs. ✓/⚠ tool markers mismatch → forced retry), **but relying on the gate as a safety net is the last line of defense for failures — it should not be the everyday dependency**.
 
-| 任务类型 | 验证手段 |
+| Task type | Verification method |
 |---|---|
-| 写文件 | `readFile` 看一眼实际写出什么了 |
-| 改代码 | `grep`/`glob` 看引用,`runShell` 跑 typecheck/test |
-| 删东西 | `glob` 确认确实没了,`grep` 确认无残留引用 |
-| 网络操作 | `curl -I` 或对应工具回看 status code / 实际返回 |
-| 修 bug | 复现一遍 bug,看是否还触发 |
+| Write file | `readFile` to check what was actually written |
+| Modify code | `grep`/`glob` to check references, `runShell` to run typecheck/test |
+| Delete something | `glob` to confirm it's gone, `grep` to confirm no residual references |
+| Network operation | `curl -I` or corresponding tool to check status code / actual response |
+| Fix bug | Reproduce the bug once, check whether it still triggers |
 
-**没核验过 = 没做完**。说"我已经修好了"前先用工具看一眼。
+**Not verified = not done**. Use a tool to check before saying "I've fixed it".
 
-## Anti-patterns(检测到这些,触发本 skill)
+## Anti-patterns (detecting these triggers this skill)
 
-- ❌ "我先做 X,再做 Y,再做 Z..." 然后就开干 —— 没问"用户要不要 Z"
-- ❌ 三次连续用 writeFile 后直接说"已完成" —— **VerifyBeforeClaim Gate** 会触发重生(成功后没用 readFile/grep/glob)
-- ❌ "应该可以了" / "看起来 OK" / "理论上没问题" —— 都是 "没核验" 的同义词
-- ❌ 把 nice-to-have 当 must,做了一堆用户没要的事 —— 这是 Karpathy 吐槽 LLM 的最大病症
+- ❌ "I'll do X, then Y, then Z..." and just diving in — without asking "does the user want Z"
+- ❌ Three consecutive `writeFile` calls followed by "done" — **VerifyBeforeClaim Gate** will trigger a retry (no `readFile`/`grep`/`glob` after completion)
+- ❌ "should be fine" / "looks OK" / "theoretically no problem" — all synonyms for "not verified"
+- ❌ Treating nice-to-have as must-have, doing a bunch of things the user didn't ask for — this is Karpathy's biggest complaint about LLMs
 
-## 与 philont 现有机制的关系
+## Relationship to existing philont mechanisms
 
-本 skill 是**前置 prevention**(prompt 层),philont 的 Drive / Gate 是**后验 detection**(runtime 拦截)。
+This skill is **upfront prevention** (prompt layer); philont's Drive / Gate is **post-hoc detection** (runtime intercept).
 
-- 用了本 skill 的提示 → 大多数情况不需要 gate 兜底
-- 没用 → HonestyGate / VerifyBeforeClaim / TaskCommitmentDrive 触发,强制重生
+- Prompts that use this skill → in most cases the gate fallback is not needed
+- Not used → HonestyGate / VerifyBeforeClaim / TaskCommitmentDrive triggers, forced retry
 
-理想状态:gate 命中率随时间下降,因为 agent 提前用了本 skill 的纪律。
+Ideal state: gate hit rate decreases over time, because the agent applied this skill's discipline upfront.
 
-## 一句话浓缩
+## One-line summary
 
-**先回答"做完长什么样",再开始;做完后用工具自证,再宣布。**
+**First answer "what does done look like", then start; after finishing, verify with tools, then declare done.**

@@ -1,7 +1,7 @@
 ---
 name: git-workflow
-description: 标准 git 工作流——branch / commit message / push / pr 的多步骤 routine,避免遗漏关键步骤(如 status 核对、commit message 写规范)。
-when_to_use: 用户说"提交一下 / 推送 / 建 PR / 切分支";完成代码改动需要进入 git workflow;commit 前需要正确写 message + 检查 status;创建 PR 需要规范流程
+description: Standard git workflow — a multi-step routine for branch / commit message / push / pr, avoiding omission of critical steps (e.g. verifying with status, writing a proper commit message).
+when_to_use: User says "commit this / push / create a PR / switch branch"; code changes are complete and need to enter the git workflow; need to write a proper message + check status before committing; creating a PR requires a standardized procedure
 version: 1.0.0
 ---
 
@@ -9,30 +9,30 @@ version: 1.0.0
 
 ## When to Use
 
-- 用户说"帮我提交 / 推送 / 发 PR"
-- 工作完成后准备 commit 时
-- 涉及 git push / git commit / git rebase / pr 等动作
+- User says "help me commit / push / open a PR"
+- Work is done and it's time to commit
+- Actions involve git push / git commit / git rebase / pr
 
 ## Pre-flight checklist
 
-每次开始 git 操作前先并行跑这三条 — 不要假设当前状态:
+Before starting any git operation, run these three commands in parallel — do not assume current state:
 
-1. `git status`(看未追踪/未暂存的变化)
-2. `git diff` (看实际改动)
-3. `git log -5 --oneline`(看最近提交风格,统一 message 风格)
+1. `git status` (see untracked / unstaged changes)
+2. `git diff` (see actual changes)
+3. `git log -5 --oneline` (see recent commit style, keep message style consistent)
 
-## Commit 规范
+## Commit Convention
 
-- **Subject**:< 70 字符,类型前缀(feat/fix/refactor/docs/chore/test) + 范围 + 一句话动机
-- **Body**:多段说明"为什么"而非"做了什么"——diff 已经显示做了什么
-- **不要**用 `git add -A` 或 `git add .`——那会把 .env / 大二进制 / IDE 配置一并塞进去。**指名添加** `git add path1 path2`
-- **不要** `--no-verify` 跳过 hook,除非用户明确要求
+- **Subject**: < 70 characters, type prefix (feat/fix/refactor/docs/chore/test) + scope + one-sentence rationale
+- **Body**: multiple paragraphs explaining "why", not "what was done" — the diff already shows what was done
+- **Do not** use `git add -A` or `git add .` — that will pull in .env / large binaries / IDE config. **Add files by name**: `git add path1 path2`
+- **Do not** use `--no-verify` to skip hooks, unless the user explicitly requests it
 
-## Push / PR 流程
+## Push / PR Procedure
 
 ```
-git status                         # 确认要提交的文件清单
-git add <specific paths>           # 不用 -A
+git status                         # confirm the list of files to commit
+git add <specific paths>           # not -A
 git commit -m "$(cat <<'EOF'
 <subject>
 
@@ -41,19 +41,19 @@ git commit -m "$(cat <<'EOF'
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
 )"
-git status                         # 确认 commit 干净
-# 推送前问用户(push 是 hard-to-reverse 行为):
+git status                         # confirm the commit is clean
+# Ask the user before pushing (push is a hard-to-reverse action):
 git push origin <branch>
 gh pr create --title "<title>" --body "<body>"
 ```
 
 ## Anti-patterns
 
-- ❌ 不看 git status 直接 `add -A` → 容易污染历史
-- ❌ commit subject "update / fix / wip" 等无信息词
-- ❌ 没问用户就 push / 强推 / amend 已发布的 commit
-- ❌ commit body 复述 diff 内容 ("modified file X to do Y")——应写 **why**
+- ❌ Running `add -A` without checking git status first → easy to pollute history
+- ❌ Commit subject "update / fix / wip" and other uninformative words
+- ❌ Pushing / force-pushing / amending an already-published commit without asking the user
+- ❌ Commit body restating the diff contents ("modified file X to do Y") — write **why** instead
 
-## 修复 hook 失败
+## Fixing Hook Failures
 
-pre-commit hook 失败 = commit 没成功。**不要** `--amend`(那会改之前的 commit)。修问题 → 重新 stage → 创建**新** commit。
+A pre-commit hook failure = the commit did NOT succeed. **Do not** use `--amend` (that would modify the previous commit). Fix the problem → re-stage → create a **new** commit.

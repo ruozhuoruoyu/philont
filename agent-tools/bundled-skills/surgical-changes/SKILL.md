@@ -1,7 +1,7 @@
 ---
 name: surgical-changes
-description: 改代码时只动该动的——bug fix 不顺手 cleanup,加 feature 不重构周边,不为"看起来更好"动用户没要求的代码;每次 diff 都问"这一行是任务要求的吗"。
-when_to_use: 收到"修个 bug" / "加个 feature" / "改一下 X" 类任务前;agent 准备改大量代码但任务只要求改一小块时;diff 包含"看起来该顺手做"的额外清理;用户对代码风格洁癖
+description: When modifying code, only touch what needs to be touched — a bug fix doesn't mean opportunistic cleanup, adding a feature doesn't mean refactoring the surrounding code, don't touch code the user didn't ask for just because it "looks better"; for every diff ask "is this line required by the task".
+when_to_use: Before receiving a "fix a bug" / "add a feature" / "change X" type task; when an agent is about to modify a large amount of code but the task only requires a small change; when the diff contains extra cleanup that "looks like it should be done while we're here"; when the user has strong opinions about code style cleanliness
 version: 1.0.0
 ---
 
@@ -9,102 +9,102 @@ version: 1.0.0
 
 ## When to Use
 
-收到以下信号时立刻走本 skill:
+Immediately invoke this skill when you see any of these signals:
 
-- **Bug fix** —— 用户说"修一下 X" / "X 报错" / "X 不工作"
-- **小特性** —— "加个 Y" / "支持 Z"(指明范围的)
-- **行为微调** —— "把 X 改成 Y" / "让 X 在 Z 时这样"
-- 看到 diff 里有**任务没要求的代码改动**
+- **Bug fix** — user says "fix X" / "X is erroring" / "X isn't working"
+- **Small feature** — "add Y" / "support Z" (with a specified scope)
+- **Behavior tweak** — "change X to Y" / "make X do this when Z"
+- You see **code changes in the diff that the task didn't ask for**
 
-## 核心规则
+## Core Rules
 
-### 一、只动该动的
+### 1. Only touch what needs to be touched
 
-任务定义了改动面 → 不要扩大。
+The task defines the change surface → do not expand it.
 
-**❌ 反例**:
-> 用户:"修一下 chunkText 在 0 长度时 crash"
-> agent diff:
->   - chunkText.ts:加 `if (text.length === 0) return [];` ← 任务要求
->   - chunkText.ts:把整个函数从 if-else 改成 switch ← 用户没要
->   - tests/chunkText.test.ts:加 30 个新测试 ← 用户没要
->   - utils/string.ts:把另一个函数也"顺手优化了" ← 完全无关
+**❌ Bad example**:
+> User: "Fix the crash in chunkText when length is 0"
+> Agent diff:
+>   - chunkText.ts: add `if (text.length === 0) return [];` ← required by task
+>   - chunkText.ts: refactor entire function from if-else to switch ← user didn't ask for this
+>   - tests/chunkText.test.ts: add 30 new tests ← user didn't ask for this
+>   - utils/string.ts: "opportunistically optimized" another function too ← completely unrelated
 
-**✅ 正例**:
-> diff 只有 chunkText.ts 一行 + 一个直接对应的回归测试,**就这两个改动**。
-> 其它"顺手能改"的东西,**列到回复里**让用户决定要不要单独提 task。
+**✅ Good example**:
+> Diff contains only one line in chunkText.ts + one directly corresponding regression test, **just those two changes**.
+> Everything else that "could be changed while we're here" — **list it in the reply** and let the user decide whether to open a separate task.
 
-### 二、Bug fix ≠ cleanup
+### 2. Bug fix ≠ cleanup
 
-修 bug 时**不要**:
-- 重命名相关变量(即使旧名字不好)
-- 重构相邻函数(即使有更好的写法)
-- 加日志 / 改格式 / 调缩进
-- 删"看起来 unused"的代码(用户可能在别处依赖)
+When fixing a bug, do **not**:
+- Rename related variables (even if the old names are bad)
+- Refactor adjacent functions (even if there's a better way to write them)
+- Add logging / change formatting / adjust indentation
+- Delete code that "looks unused" (the user may depend on it elsewhere)
 
-如果**真的**有相关 cleanup 需要做,在回复末尾告诉用户:"我注意到 X 也有类似问题,要单独开一个 fix 吗?",**不要塞进当前 commit**。
+If there is **genuinely** related cleanup that needs to be done, tell the user at the end of your reply: "I noticed X also has a similar issue — want me to open a separate fix for that?", **do not fold it into the current commit**.
 
-### 三、不删别人的代码,只删自己的"垃圾"
+### 3. Don't delete other people's code, only delete your own "garbage"
 
-允许:
-- ✅ 删自己**这次任务里**写到一半又决定不要的代码
-- ✅ 删自己**这次任务里**新写的、又因为重构变 unused 的导入
+Allowed:
+- ✅ Delete code you wrote **in this task** that you decided not to keep midway through
+- ✅ Delete imports you added **in this task** that became unused after refactoring
 
-禁止:
-- ❌ 删别人写的"看起来 unused"的东西 —— 你不知道 reflection / dynamic import / runtime 字符串引用
-- ❌ "顺手清理"周边的 dead-code-look-alike
+Prohibited:
+- ❌ Delete other people's code that "looks unused" — you don't know about reflection / dynamic import / runtime string references
+- ❌ "Opportunistically clean up" surrounding dead-code-look-alikes
 
-**判断标准**:这段代码是不是**这一次任务**新加的?是 → 可以删自己的;否 → 不动。
+**Decision rule**: Was this code added for **this task specifically**? Yes → you can delete your own; No → don't touch it.
 
-### 四、风格匹配,不"改进"
+### 4. Match style, don't "improve" it
 
-用现有文件的:
-- 命名约定(camelCase / snake_case / 缩写偏好)
-- 错误处理模式(throw vs Result vs 回调)
-- 日志格式
-- 注释密度
+Use the existing file's:
+- Naming conventions (camelCase / snake_case / abbreviation preferences)
+- Error handling patterns (throw vs Result vs callbacks)
+- Logging format
+- Comment density
 
-即使你觉得新风格"更好",在**这个文件**里就跟现有的来。
+Even if you think the new style is "better", in **this file** follow what already exists.
 
-如果整个项目风格不统一、希望改 → 单独提任务,别夹带。
+If the project's style is inconsistent across the board and you want to fix it → open a separate task, don't sneak it in.
 
-### 五、不写"以后可能用得上"的代码
+### 5. Don't write "might be useful later" code
 
-任务说要 X 个 case,就写 X 个 case。
+If the task calls for X cases, write X cases.
 
-- 没必要的"为未来准备"的参数 ❌
-- 没必要的"以后可能扩展"的接口 ❌
-- 没必要的"通用化"的抽象 ❌
+- Unnecessary "future-proofing" parameters ❌
+- Unnecessary "might be extended later" interfaces ❌
+- Unnecessary "generalized" abstractions ❌
 
-参考 Karpathy 原话:**"最小代码,不写预测性功能"**。三行相似代码比"提前抽象"更好。
+Per Karpathy's exact words: **"Minimal code, don't write predictive features"**. Three similar lines of code beats "premature abstraction".
 
-## 自检清单(commit 前过一遍)
+## Self-check Checklist (review before committing)
 
 ```
-[ ] 我的 diff 里**每一行**都能直接对应到任务描述?
-[ ] 没有"顺手"改的、用户没要求的东西?
-[ ] 没删别人写的代码,即使它"看起来 unused"?
-[ ] 风格和现有文件一致?
-[ ] 没写"以后可能用得上"的参数 / 接口 / 抽象?
+[ ] Every line in my diff can be directly traced back to the task description?
+[ ] Nothing was "opportunistically" changed that the user didn't ask for?
+[ ] No other people's code was deleted, even if it "looks unused"?
+[ ] Style is consistent with the existing file?
+[ ] No "might be useful later" parameters / interfaces / abstractions were written?
 ```
 
-任意一个 No → 拆 diff,把不该提的部分撤掉,在回复里告诉用户"我注意到 X,要不要单独开 task"。
+Any No → split the diff, revert the parts that shouldn't be included, and tell the user in your reply "I noticed X — want to open a separate task for that".
 
-## 与 philont 现有机制的关系
+## Relationship to Existing philont Mechanisms
 
-philont CLAUDE.md "Doing tasks" 段已经强调了这一点("A bug fix doesn't need surrounding cleanup")。本 skill 是把那段抽出来加可执行步骤,让 agent 能 `searchSkills('surgical')` 按需召回。
+The philont CLAUDE.md "Doing tasks" section already emphasizes this ("A bug fix doesn't need surrounding cleanup"). This skill extracts that section and adds executable steps so the agent can `searchSkills('surgical')` and recall it on demand.
 
-## Anti-pattern 速查
+## Anti-pattern Quick Reference
 
-| 你想做的 | 该不该 |
+| What you want to do | Should you? |
 |---|---|
-| 修 bug 顺手改下错误信息文案 | ❌(除非用户提到了) |
-| 加 feature 顺手把同文件其他函数加类型注解 | ❌(单独 task) |
-| 改 typo 顺手把整个文件 prettier 一遍 | ❌ |
-| 删自己刚加的 import,因为重构后不用了 | ✅ |
-| 重命名一个本任务新加的变量 | ✅ |
-| 重命名一个用了 3 年的现存变量 | ❌ |
+| Fix bug, opportunistically update an error message string | ❌ (unless the user mentioned it) |
+| Add feature, opportunistically add type annotations to other functions in the same file | ❌ (separate task) |
+| Fix typo, opportunistically run prettier on the entire file | ❌ |
+| Delete an import you just added, because it's no longer needed after refactoring | ✅ |
+| Rename a variable that was added in this task | ✅ |
+| Rename an existing variable that has been in use for 3 years | ❌ |
 
-## 一句话浓缩
+## One-line Summary
 
-**改 diff 里每一行都要能在任务里找到出处;找不到的,撤回去。**
+**Every line in the diff must have a source in the task; anything that doesn't, revert it.**

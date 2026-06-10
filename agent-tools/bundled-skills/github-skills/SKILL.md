@@ -1,7 +1,7 @@
 ---
 name: github-skills
-description: 从 GitHub 任意仓库的 SKILL.md 文件直接装入技能,补 ClawHub 之外的长尾。
-when_to_use: 用户给出 GitHub repo URL 让"装一个 X skill";用户说"看 github 上有没有 X 的 skill";本地 + clawhub 都没找到合适 skill,需要去 github 长尾搜
+description: Install skills directly from SKILL.md files in any GitHub repository, covering the long tail beyond ClawHub.
+when_to_use: User provides a GitHub repo URL and asks to "install an X skill"; user says "check if there's a skill for X on GitHub"; no suitable skill found locally or on clawhub, need to search the GitHub long tail
 version: 1.0.0
 ---
 
@@ -9,35 +9,35 @@ version: 1.0.0
 
 ## When to Use
 
-- ClawHub `clawhub search` 找不到合适的,但我相信 GitHub 上有
-- 用户给了一个 GitHub URL 让装("装这个仓库的 skill:https://github.com/foo/bar")
-- 想找"非主流但优秀"的领域 skill(很多个人项目只发 GitHub 不发 ClawHub)
+- `clawhub search` finds nothing suitable, but I believe GitHub has something
+- User gave a GitHub URL to install ("install this repo's skill: https://github.com/foo/bar")
+- Looking for "niche but excellent" domain skills (many personal projects only publish to GitHub, not ClawHub)
 
-## 前置依赖
+## Prerequisites
 
-- `gh` CLI(GitHub CLI),`brew install gh` 或 `apt install gh`,装好后 `gh auth login` 一次
-- 本 skill 的 search 用到 `gh search code`,需要登录态。如果 `gh auth status` 失败,告诉用户先登录。
+- `gh` CLI (GitHub CLI): `brew install gh` or `apt install gh`, then run `gh auth login` once
+- The `search` in this skill uses `gh search code`, which requires an authenticated session. If `gh auth status` fails, tell the user to log in first.
 
-## 核心流程
+## Core Workflow
 
-### 1. 搜索 GitHub 上的 SKILL.md
+### 1. Search GitHub for SKILL.md files
 
 ```
 shell({ command: "gh search code 'philont skill SKILL.md path:**/SKILL.md' --limit 10 --json repository,path" })
 ```
 
-按主题缩小:
+Narrow by topic:
 
 ```
 shell({ command: "gh search code '<topic> SKILL.md path:**/SKILL.md' --limit 10 --json repository,path" })
 ```
 
-JSON 输出里挑 repository.nameWithOwner + path,组合成 raw URL:
+From the JSON output, pick `repository.nameWithOwner` + `path`, and assemble into a raw URL:
 ```
 https://raw.githubusercontent.com/<owner>/<repo>/HEAD/<path>
 ```
 
-### 2. 拉取并校验
+### 2. Fetch and validate
 
 ```
 http({
@@ -46,27 +46,27 @@ http({
 })
 ```
 
-拿到文本后**校验**:
-- 必须以 `---\n` 开头(YAML frontmatter)
-- frontmatter 必须含 `name:` 字段
-- body 必须含 `## When to Use` 段(否则 trigger keyword 提取不出来)
-- 整篇 < 8KB(philont loader 的 cap,超过会被拒)
+Once the text is retrieved, **validate**:
+- Must start with `---\n` (YAML frontmatter)
+- frontmatter must contain a `name:` field
+- body must contain a `## When to Use` section (otherwise trigger keywords cannot be extracted)
+- Entire file < 8KB (philont loader cap — files exceeding this will be rejected)
 
-任一不通过,告诉用户原因,不装。
+If any check fails, tell the user the reason and do not install.
 
-### 3. 装入
+### 3. Install
 
-从 frontmatter 读出 `name`(若没有,fallback 用 owner-repo 形式或问用户)。然后:
+Read the `name` from frontmatter (if missing, fall back to owner-repo form or ask the user). Then:
 
 ```
 installSkill({
   name: "<from-frontmatter-or-derived>",
-  content: "<整篇 SKILL.md 文本>",
+  content: "<full SKILL.md text>",
   source: "github:<owner>/<repo>@<commit-sha>"
 })
 ```
 
-`<commit-sha>` 可以从另一次 http GET 拿:
+`<commit-sha>` can be obtained with another HTTP GET:
 ```
 http({
   method: "GET",
@@ -74,36 +74,36 @@ http({
   headers: { "Accept": "application/vnd.github.v3+json" }
 })
 ```
-读响应 body 的 `.sha`,截取前 7 位。如果懒省事,直接写 `github:<owner>/<repo>@HEAD`,但版本不可重现。
+Read `.sha` from the response body and take the first 7 characters. If you want to keep it simple, write `github:<owner>/<repo>@HEAD` directly, but the version will not be reproducible.
 
-### 4. 卸载
+### 4. Uninstall
 
 ```
 uninstallSkill({ name: "<name>" })
 ```
 
-和 ClawHub 装入的 skill 卸载同路径。
+Same path as uninstalling a skill installed from ClawHub.
 
-## 决策树:GitHub URL 用户给我了,直接装?
+## Decision Tree: User gave me a GitHub URL — install directly?
 
-- URL 形如 `https://github.com/<owner>/<repo>/blob/.../SKILL.md` → 转成 raw URL,直接走流程
-- URL 是仓库根 → 试 `https://raw.githubusercontent.com/<owner>/<repo>/HEAD/SKILL.md`,失败再问用户具体路径
-- URL 不是 GitHub → 用 `installSkill` content 模式直接装(任意 HTTP 源都行,见 `Anti-patterns` 注意事项)
+- URL looks like `https://github.com/<owner>/<repo>/blob/.../SKILL.md` → convert to raw URL, follow the workflow directly
+- URL is a repo root → try `https://raw.githubusercontent.com/<owner>/<repo>/HEAD/SKILL.md`; if that fails, ask the user for the specific path
+- URL is not GitHub → use `installSkill` content mode to install directly (any HTTP source works; see `Anti-patterns` notes)
 
 ## Anti-patterns
 
-- ❌ 不要不校验就 `installSkill`。GitHub 上的 SKILL.md 没有 ClawHub 那种发布前审核,可能是别人测试时写歪了的。最少校验三件:有 frontmatter、有 name、有 When to Use。
-- ❌ 不要忘了 source 标签。GitHub URL 用户回头问"从哪装的",我必须能答上。
-- ❌ 不要用 `gh repo clone` 拉整个仓库。我们只要 SKILL.md 一个文件,clone 浪费磁盘和时间。`http` GET raw 即可。
-- ❌ 不要装私有仓里的 SKILL.md 而不告诉用户。私有仓 `gh api` 能看到但 raw URL 默认 401。如果用户没明说要装私有仓,跳过。
-- ❌ 不要在 `name` 字段里塞 `owner/repo` 这种带斜杠的字符。philont 的 installSkill 只允许 `[a-z0-9_-]`,会被拒。derive name 时把斜杠换成 `-`。
+- ❌ Don't call `installSkill` without validating first. SKILL.md files on GitHub lack the pre-publish review that ClawHub has; they may have been written incorrectly during someone's testing. Validate at minimum three things: has frontmatter, has name, has When to Use.
+- ❌ Don't forget the source tag. If the user later asks "where did this come from", I must be able to answer.
+- ❌ Don't use `gh repo clone` to pull the entire repository. We only need one SKILL.md file; cloning wastes disk space and time. Use an `http` GET on the raw URL instead.
+- ❌ Don't install a SKILL.md from a private repo without telling the user. Private repos are accessible via `gh api`, but raw URLs return 401 by default. If the user hasn't explicitly asked to install from a private repo, skip it.
+- ❌ Don't put `owner/repo`-style strings containing slashes in the `name` field. philont's installSkill only allows `[a-z0-9_-]` and will reject it. When deriving the name, replace slashes with `-`.
 
-## 失败处理
+## Failure Handling
 
-| 现象 | 应对 |
+| Symptom | Response |
 |---|---|
-| `gh: command not found` | 告诉用户 `brew install gh` / `apt install gh` |
-| `gh auth status` 报未登录 | 告诉用户跑 `gh auth login` |
-| raw URL 返回 404 | 试 `master` 分支(老仓库默认分支不是 main),再失败告诉用户该路径没文件 |
-| frontmatter 解析失败 | 把原文头 200 字给用户看,问要不要"原样装"(用 `installSkill content` 强制覆盖) |
-| 内容 > 8KB | 不装。告诉用户该 SKILL.md 太长,建议作者拆分 |
+| `gh: command not found` | Tell the user to run `brew install gh` / `apt install gh` |
+| `gh auth status` reports not logged in | Tell the user to run `gh auth login` |
+| raw URL returns 404 | Try the `master` branch (old repos default to master, not main); if that also fails, tell the user the file doesn't exist at that path |
+| frontmatter parse failure | Show the user the first 200 characters of the raw content and ask whether they want to "install as-is" (force-override with `installSkill content`) |
+| Content > 8KB | Do not install. Tell the user the SKILL.md is too long and suggest the author split it |

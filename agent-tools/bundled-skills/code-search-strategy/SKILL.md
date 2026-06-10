@@ -1,7 +1,7 @@
 ---
 name: code-search-strategy
-description: 在代码库中找东西的高效三步法——glob 定位 → grep 关键词 → readFile 精读,而不是一上来就跑全仓 grep 或 readFile 整文件。
-when_to_use: 用户问"X 在代码哪里 / 谁实现了 X / 怎么找 Y";要修改某模块前定位文件;debug 想找 stack trace 来源;读不熟悉的代码库前定位入口;面对大仓库不知从哪开始
+description: An efficient three-step method for finding things in a codebase — glob to locate → grep for keywords → readFile to read closely. Avoids running a full-repo grep or reading entire files from the start.
+when_to_use: User asks "where is X in the code / who implements X / how do I find Y"; locating a file before modifying a module; debugging and wanting to trace a stack trace back to its source; locating entry points before reading an unfamiliar codebase; facing a large repo and not knowing where to begin
 version: 1.0.0
 ---
 
@@ -9,60 +9,60 @@ version: 1.0.0
 
 ## When to Use
 
-- 需要在代码库中找函数 / 类 / 配置 / 字符串
-- 用户说"X 在哪里 / 谁调用了 Y / 哪里定义了 Z"
-- 准备改某个跨多文件的概念
+- Need to find a function / class / config / string in the codebase
+- User says "where is X / who calls Y / where is Z defined"
+- About to change a concept that spans multiple files
 
-## 三步法(从粗到细)
+## Three-Step Method (Coarse to Fine)
 
-### Step 1 · glob 定位文件集
+### Step 1 · glob to Locate the File Set
 
-先用 `glob` 圈定可能的文件,**不要**对整仓裸跑 grep。
+Use `glob` first to narrow down candidate files — **do not** run a bare grep across the entire repo.
 ```
-glob("**/*.ts")              # 整个 ts 文件集
-glob("src/**/*.{ts,tsx}")    # 只 src 下
-glob("**/auth*.ts")          # 名字含 auth
+glob("**/*.ts")              # all ts files
+glob("src/**/*.{ts,tsx}")    # only under src
+glob("**/auth*.ts")          # names containing auth
 ```
 
-glob 输出是文件名清单,**人/LLM 都能扫**——比 grep 整仓输出几百匹配行更省 token。
+The glob output is a list of filenames that **a person/LLM can scan** — far fewer tokens than hundreds of grep match lines across the whole repo.
 
-### Step 2 · grep 缩到匹配行
+### Step 2 · grep to Narrow Down to Matching Lines
 
-只对 Step 1 圈出的子集 grep:
+Only grep against the subset of files identified in Step 1:
 ```
 grep -n "<symbol>" <files-from-glob>
 ```
 
-加 `-n`(行号)+ `-A 2 -B 2`(上下文 2 行)后续直接跳读。
+Add `-n` (line numbers) + `-A 2 -B 2` (2 lines of context) for easy jump-reading later.
 
-**不要** `grep -r "X" /` 全盘扫——返回几百行,LLM 失焦,用户也读不进去。
+**Do not** run `grep -r "X" /` across the whole disk — it returns hundreds of lines, causing LLM to lose focus and making it unreadable.
 
-### Step 3 · readFile 精读
+### Step 3 · readFile to Read Closely
 
-只读 grep 命中文件的关键段(传 `offset` + `limit`):
+Only read the key sections of files that matched in grep (pass `offset` + `limit`):
 ```
-readFile(path, offset=120, limit=40)   # 看第 120 行附近 40 行
-```
-
-整文件 read 超 500 行就考虑分段。
-
-## 例子对比
-
-**❌ 慢且占 token**:
-```
-grep -r "useState" .         # 数千行命中,看不过来
+readFile(path, offset=120, limit=40)   # read 40 lines around line 120
 ```
 
-**✅ 高效**:
+If a full file read exceeds 500 lines, consider reading in segments.
+
+## Comparison Example
+
+**❌ Slow and token-heavy**:
 ```
-glob("src/components/**/*.tsx")        # 圈出 ~50 个组件文件
-grep -ln "useState" <those files>      # 哪些组件用了 useState
-readFile(<top-3>, ranges...)           # 精读最相关的几个
+grep -r "useState" .         # thousands of hits, impossible to review
+```
+
+**✅ Efficient**:
+```
+glob("src/components/**/*.tsx")        # narrow to ~50 component files
+grep -ln "useState" <those files>      # which components use useState
+readFile(<top-3>, ranges...)           # closely read the most relevant ones
 ```
 
 ## Anti-patterns
 
-- ❌ 一上来 `grep -r` 全仓 → token 爆炸 + 信号被噪音淹没
-- ❌ readFile 一个 5000 行的文件不传 offset/limit → 浪费上下文窗口
-- ❌ 只看第一个 grep 命中就下结论 → 同名符号经常多处定义
-- ❌ glob 用过宽的模式 `**/*` 而不限定扩展名 → 扫到二进制 / 锁文件
+- ❌ Starting with `grep -r` across the whole repo → token explosion + signal buried in noise
+- ❌ readFile on a 5000-line file without passing offset/limit → wastes the context window
+- ❌ Drawing conclusions from only the first grep hit → the same symbol name is often defined in multiple places
+- ❌ Using an overly broad glob pattern `**/*` without restricting by extension → scans binaries / lock files
