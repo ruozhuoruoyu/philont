@@ -385,7 +385,10 @@ const REASON_TOOL_NAMES: ReadonlySet<string> = new Set(REASON_TOOL_DEFS.map((d) 
  *   2. **Verification teeth**: z3Verify (SMT solver, can decide/bounded arithmetic, verify
  *      lemmas, find counterexamples) + pariGp (PARI/GP number-theory CAS, covers z3's blind
  *      spots: factoring / primality certificates / elliptic curves / counterexample search /
- *      concrete values).
+ *      concrete values) + magnitude (asymptotic order-of-growth algebra — the analytic/quantitative
+ *      tooth: decides o/O/Θ and whether a pile of bounds composes to beat a target, incl. ∃-feasibility
+ *      over free parameters; offloads the epsilon-management an LLM reliably slips on. Pure, no external
+ *      binary — unlike z3/gp it needs nothing installed).
  * **Deliberately excluded**: web browsing (webSearch/webFetch/fetchUrl) and directory browsing
  * (listDir/inspectPath) — in practice sub-LLMs use them to avoid real reasoning, degrading the
  * reasoning loop to browsing. Literature survey / broad research is the job of research_focus
@@ -405,6 +408,7 @@ export const DEEP_EXPLORE_RESEARCH_ALLOW: ReadonlySet<string> = new Set([
   'readFile',
   'z3Verify',
   'pariGp',
+  'magnitude',
 ]);
 
 // ── Pure functions (independently testable) ─────────────────────────────────────────────────────
@@ -589,6 +593,19 @@ const PARI_GP_PRIMER: readonly string[] = [
   '- Always `print(...)` your conclusion — only printed text is returned to you.',
 ];
 
+/**
+ * Short primer for the magnitude (asymptotic order-of-growth) tool. The single biggest failure mode of
+ * an LLM doing analytic/quantitative proofs is mis-tracking magnitudes and asserting an unjustified
+ * parameter balance; this nudges the model to OFFLOAD that arithmetic instead of doing it in its head.
+ */
+const MAGNITUDE_PRIMER: readonly string[] = [
+  '## magnitude tool (order-of-growth algebra — offload the epsilon arithmetic)',
+  '- Write magnitudes as products of powers of growth variables: `N` and `L` (= log N) by default; rational exponents ok (`N^(3/2)`), and exponents may carry free parameters (`L^-A`, `N^(1-B)`). `^` binds tighter than `*`; multi-term exponents need parentheses (`N^(2*t)`).',
+  '- compare: `magnitude(action="compare", x="N*L", y="N", relation="o")` → is x = o(y)? (catches slips like "N·log N is o(N)" — it is NOT).',
+  '- closes: `magnitude(action="closes", target="N^2*L^-3", terms=["N^2*L^-A"], params={"A":{"gt":0}})` → do the bound(s) sum below the target, and does a parameter choice exist? Returns a witness (e.g. A=4) or, if impossible, the binding obstruction.',
+  '- It reasons about ORDERS only, never hidden constants. A "closes" verdict means the orders compose — you still owe an analytic justification for each bound\'s SHAPE. A "does not close" with a dominant-scale obstruction is a real structural gap (a sharper idea is needed), not a tuning failure — record it honestly.',
+];
+
 export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode[], lessons: string[] = []): string {
   const lines: string[] = [];
   lines.push('You are a deep-exploreing engine advancing a reasoning tree to crack a root proposition. Record progress into the tree at every step.');
@@ -643,6 +660,8 @@ export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode
   for (const l of renderRecentToolFailures(session.id)) lines.push(l);
   lines.push('');
   for (const l of PARI_GP_PRIMER) lines.push(l);
+  lines.push('');
+  for (const l of MAGNITUDE_PRIMER) lines.push(l);
 
   lines.push('');
   lines.push('## Your actions (tools)');
@@ -650,6 +669,7 @@ export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode
   lines.push('- reason_record(nodeId, status, result, approach?): settle a node as proved/refuted/dead_end. **Primary action.**');
   lines.push('- z3Verify(smtlib): **external check** — use the Z3 solver to rigorously verify a decidable/bounded/arithmetic subclaim or find a counterexample.');
   lines.push('- pariGp(script): **external computation** — use PARI/GP for number-theory/algebra computation and counterexample search (factoring, primality certificates, elliptic curves, enumeration, concrete values). Prefer it over z3 for number theory. Use print() to output your conclusion.');
+  lines.push('- magnitude(action, …): **asymptotic order-of-growth algebra** — do NOT track magnitudes like N^(3/2)·(log N)^-A in your head (you WILL slip). action="compare" decides X=o(Y)/O(Y); action="closes" takes a target + a sum of bounds (terms[]) and decides whether they compose to beat it — and with free parameters {A,B,κ,…} whether a choice EXISTS that closes it (returns a witness, or the binding obstruction). This is how you settle an "estimates balance" / parameter-choice step rigorously instead of hand-waving.');
   lines.push('- memory-recall tools (searchNotes/getFact/readFile, etc.): **auxiliary only** — to recall your own earlier conclusions/computations, not a substitute for reasoning.');
   lines.push('');
   lines.push('## How to reason (discipline)');
@@ -658,6 +678,7 @@ export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode
   lines.push('3. **If a machine can verify/compute it, don\'t just assert it** — pick the right tool by subclaim type:');
   lines.push('   · **decidable/bounded/arithmetic** (linear or bounded-nonlinear int/real, bit-vectors, propositional logic) → z3Verify: to prove ∀x.P(x), encode ∃x.¬P(x) as SMT-LIB, unsat means P holds; sat means the model is a counterexample.');
   lines.push('   · **number-theory/algebra computation** (factoring, primality, modular arithmetic, elliptic curves, enumerating a range for counterexamples, concrete instances) → pariGp: e.g. print(factor(N)) to show N is composite, print(isprime(p)) for a certified primality test, for(...) to enumerate for counterexamples.');
+  lines.push('   · **asymptotic / analytic estimates** (orders of growth, "do these bounds sum below the target?", "is there a parameter choice that makes the error terms balance?") → magnitude: never assert a magnitude comparison or a parameter-balancing step by eye — encode the bounds and let magnitude decide (it returns a witness if it closes, or the obstruction if no parameter choice can — the honest verdict for a real gap).');
   lines.push('   · After checking, take the result to reason_record (proved/refuted, with the tool\'s verdict/factorization/counterexample in `result`). **Don\'t expect z3/gp to settle a big conjecture itself** — they compute instances, find counterexamples, give strong evidence, but a general statement still needs human-style reasoning.');
   lines.push('4. Use recall tools only **once** when you need to recall a specific fact / a result you computed earlier, then return to decompose/record. **Do not run multiple rounds of only search/read without updating the tree.**');
   lines.push('5. When a path is stuck → reason_record(dead_end, approach=what you tried) to backtrack, then take another frontier path.');
@@ -720,6 +741,8 @@ export function buildDiscoverPrompt(
   for (const l of renderRecentToolFailures(session.id)) lines.push(l);
   lines.push('');
   for (const l of PARI_GP_PRIMER) lines.push(l);
+  lines.push('');
+  for (const l of MAGNITUDE_PRIMER) lines.push(l);
 
   lines.push('');
   lines.push('## Your actions (tools)');
@@ -1290,7 +1313,7 @@ export function makeReasoningToolRunner(
     // Surface verify-tool failures to the operator log — otherwise a broken pariGp (gp missing,
     // spawn error, timeout, bad script) is silent except for a "⚠ pariGp" status ping, and the
     // computational verification quietly never works. The full error stays in the sub-LLM's tool_result.
-    if (!result.ok && (name === 'pariGp' || name === 'z3Verify')) {
+    if (!result.ok && (name === 'pariGp' || name === 'z3Verify' || name === 'magnitude')) {
       console.warn(`[deep-explore] ${name} failed: ${(result.error ?? '(no error message)').slice(0, 400)}`);
       // Learn from it: stash this failure (deduped by signature) so the next round's prompt warns
       // the model off repeating the same pariGp/z3 mistake (renderRecentToolFailures).

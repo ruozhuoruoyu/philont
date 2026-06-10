@@ -1483,7 +1483,7 @@ tools.registerInternal(planAndExecuteTool);
 // is enabled, read by the (default-off) auto-advance loop started further down.
 let deepExploreAdvanceSession: ((session: ReasoningSession) => Promise<ToolResult>) | null = null;
 if (process.env.PHILONT_DEEP_EXPLORE !== '0') {
-  const deepExploreVerifyTools = new Set(['z3Verify', 'pariGp']);
+  const deepExploreVerifyTools = new Set(['z3Verify', 'pariGp', 'magnitude']);
   const readOnlyToolDefs: ToolDefinition[] = tools.list()
     .filter((t) => DEFAULT_TOOL_WHITELIST.has(t.name) || deepExploreVerifyTools.has(t.name))
     .map((t) => ({ name: t.name, description: t.description, parameters: JSON.stringify(t.schema) }));
