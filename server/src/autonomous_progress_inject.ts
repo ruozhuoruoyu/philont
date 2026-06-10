@@ -43,13 +43,13 @@ export function buildAutonomousProgressInjection(
     .slice(0, topK);
   if (recent.length === 0) return '';
 
-  const lines: string[] = ['## 我自己刚做了什么(autonomous)'];
+  const lines: string[] = ['## What I just did on my own (autonomous)'];
   for (const r of recent) {
     lines.push(renderOne(r));
   }
   const out = lines.join('\n');
   if (out.length > maxChars) {
-    return out.slice(0, maxChars) + '… (截断)';
+    return out.slice(0, maxChars) + '… (truncated)';
   }
   return out;
 }
@@ -81,13 +81,13 @@ export function buildK7BridgeReviewSection(
     .slice(0, topK);
   if (recent.length === 0) return '';
 
-  const lines: string[] = ['## 我自己复核了上一轮的承诺(K7→K8)'];
+  const lines: string[] = ['## I reviewed my previous commitments (K7→K8)'];
   for (const r of recent) {
     lines.push(renderOne(r));
   }
   const out = lines.join('\n');
   if (out.length > maxChars) {
-    return out.slice(0, maxChars) + '… (截断)';
+    return out.slice(0, maxChars) + '… (truncated)';
   }
   return out;
 }
@@ -119,8 +119,8 @@ export function buildResearchPendingGrantSection(
       if (q.status !== 'open' || !q.pendingTool) continue;
       const why = q.pendingTool.why?.trim();
       lines.push(
-        `- 研究「${p.title}」需要用 \`${q.pendingTool.tool}\`${why ? ` 来${why}` : ''} —— ` +
-          `批准请调 grant_research_tool({ pursuitId: "${p.id}", tool: "${q.pendingTool.tool}" })`,
+        `- Researching "${p.title}" needs \`${q.pendingTool.tool}\`${why ? ` to ${why}` : ''} — ` +
+          `to approve, call grant_research_tool({ pursuitId: "${p.id}", tool: "${q.pendingTool.tool}" })`,
       );
       if (lines.length >= topK) break;
     }
@@ -128,8 +128,8 @@ export function buildResearchPendingGrantSection(
   }
   if (lines.length === 0) return '';
 
-  const out = ['## 后台研究待批准', ...lines].join('\n');
-  if (out.length > maxChars) return out.slice(0, maxChars) + '… (截断)';
+  const out = ['## Background research — pending approval', ...lines].join('\n');
+  if (out.length > maxChars) return out.slice(0, maxChars) + '… (truncated)';
   return out;
 }
 
@@ -161,11 +161,11 @@ export function buildReasoningProgressSection(
   const proved = nodes.filter((n) => n.status === 'proved').length;
   const dead = nodes.filter((n) => n.status === 'dead_end').length;
 
-  const lines: string[] = ['## 进行中的深度推理(已保存的状态快照,不是本回合的结果)'];
-  lines.push(`- 难题:${session.goal}`);
-  lines.push(`- 上次保存时:已证 ${proved} / 待攻(frontier) ${frontier.length} / 死胡同 ${dead}`);
+  const lines: string[] = ['## Deep reasoning in progress (a SAVED snapshot, not this turn\'s result)'];
+  lines.push(`- Problem: ${session.goal}`);
+  lines.push(`- As last saved: proved ${proved} / frontier (to attack) ${frontier.length} / dead ends ${dead}`);
   if (frontier.length) {
-    lines.push('- 上次在攻:' + frontier.slice(0, topFrontier).map((n) => n.claim).join(' / '));
+    lines.push('- Last attacking: ' + frontier.slice(0, topFrontier).map((n) => n.claim).join(' / '));
   }
   // 2026-06-08: two failure modes this block must prevent, both observed in production —
   // (1) HIJACK: an imperative "要接着推进就调 continue" made the model auto-continue on EVERY turn,
@@ -177,21 +177,21 @@ export function buildReasoningProgressSection(
   // So: frame the numbers as a stale snapshot, forbid fabricating round results without an actual
   // call, and keep it subordinate to the user's current request.
   lines.push(
-    '⚠️ 上面是**已保存的快照,不是这一回合跑出来的**。要推进或查看最新进展,**必须实际调用 deep_explore**' +
-    '(action=continue 真跑一轮、会阻塞数分钟 / action=status 看当前树)。' +
-    '**严禁在没有实际调用 deep_explore 的情况下编造"第N轮 / +N证(某定理) / 时间帽 / x开→y开 / 死胡同"之类的回合结果——那是在欺骗用户。** ' +
-    '另外这可能来自其它渠道/会话:**优先处理用户当前这条消息的实际请求**;只有用户明确要求"继续/推进这项推理"时才调 continue,问别的事就别擅自续跑。',
+    '⚠️ The above is **a saved snapshot, NOT produced in this turn**. To advance it or see the latest progress, you **must actually call deep_explore** ' +
+    '(action=continue really runs a round and blocks for several minutes / action=status shows the current tree). ' +
+    '**It is strictly forbidden to fabricate a round result like "round N / +N proved (some theorem) / time cap / x open→y open / dead end" WITHOUT actually calling deep_explore — that is deceiving the user.** ' +
+    'Also, this may belong to another channel/session: **prioritize the actual request in the user\'s current message**; only call continue when the user explicitly asks to "continue / advance this reasoning" — do not auto-resume when they ask about something else.',
   );
 
   const out = lines.join('\n');
-  return out.length > maxChars ? out.slice(0, maxChars) + '… (截断)' : out;
+  return out.length > maxChars ? out.slice(0, maxChars) + '… (truncated)' : out;
 }
 
 function renderOne(i: Initiative): string {
   const summary = (i.outcomeSummary ?? '').trim();
   const refs = i.outcomeRefs;
   const refsLine = refs && (refs.facts.length + refs.notes.length > 0)
-    ? ` [产出 ${refs.facts.length}fact/${refs.notes.length}note]`
+    ? ` [produced ${refs.facts.length}fact/${refs.notes.length}note]`
     : '';
   const ago = i.completedAt ? formatAgo(Date.now() - i.completedAt) : '';
   const head = `- (${i.driver}/${i.kind}) ${i.targetRef}${ago ? ` · ${ago}` : ''}${refsLine}`;
@@ -200,8 +200,8 @@ function renderOne(i: Initiative): string {
 }
 
 function formatAgo(ms: number): string {
-  if (ms < 60_000) return '刚刚';
-  if (ms < 60 * 60_000) return `${Math.round(ms / 60_000)} 分钟前`;
-  if (ms < 24 * 60 * 60_000) return `${Math.round(ms / (60 * 60_000))} 小时前`;
-  return `${Math.round(ms / (24 * 60 * 60_000))} 天前`;
+  if (ms < 60_000) return 'just now';
+  if (ms < 60 * 60_000) return `${Math.round(ms / 60_000)} min ago`;
+  if (ms < 24 * 60 * 60_000) return `${Math.round(ms / (60 * 60_000))} h ago`;
+  return `${Math.round(ms / (24 * 60 * 60_000))} d ago`;
 }
