@@ -71,8 +71,8 @@ the tool returns a clear "not installed" error rather than crashing.
 ### The one-command path
 
 ```bash
-git clone https://github.com/ruozhuoruoyu/philont.git
-cd philont
+git clone https://github.com/ruozhuoruoyu/Philont-Agent.git
+cd Philont-Agent
 cp .env.example .env          # then edit .env and set ANTHROPIC_API_KEY
 ./scripts/start.sh            # Windows: .\scripts\start.ps1
 ```

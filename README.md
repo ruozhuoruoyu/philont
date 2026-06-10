@@ -1,4 +1,4 @@
-# philont
+# Philont-Agent
 
 **philont: the being-agent.**
 
@@ -109,8 +109,8 @@ The honesty mechanism reaches here too: a node claimed *proved* on an order-boun
 > No Rust toolchain needed — the runtime is pure TypeScript.
 
 ```bash
-git clone https://github.com/ruozhuoruoyu/philont.git
-cd philont
+git clone https://github.com/ruozhuoruoyu/Philont-Agent.git
+cd Philont-Agent
 
 # Build everything and start.
 # The launcher opens your browser to a setup wizard, then supervises the agent.
