@@ -24,7 +24,7 @@ The open-source agent field competes on cost-per-token, tool count, and integrat
 |---|:---:|:---:|:---:|
 | Core model | extrinsic task runner | task runner + learning loop | **autonomous being with intrinsic drives** |
 | Acts on its own initiative | ❌ | ⚠️ scheduled cron | ✅ curiosity · pursuit · commitment drives |
-| Self-learning from failure | ❌ | ✅ | ✅ **+ honesty gates against pretended success** |
+| Self-learning from its own **failures** | ❌ | ⚠️ learns from successful runs, not failures | ✅ failure notes · anti-patterns · **honesty gates against pretended success** |
 | Step-by-step deep reasoning | ❌ | ❌ | ✅ `deep_explore` conjecture loop |
 | Built-in permission / audit layer | command allowlist | command approval | ✅ 3×4 capability matrix · validator chain · SHA-256 audit log |
 | Runs complex tasks on a **cheap** model | needs a strong model | needs a strong model | ✅ **DeepSeek V4 Flash — ~100× cheaper** |
