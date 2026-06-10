@@ -72,7 +72,9 @@ for (const r of rows) {
   full[s] = (full[s] || 0) + 1;
 }
 const fullRows = Object.entries(full)
-  .map(([signature, count]) => ({ signature, count, excluded: /^(?:pariGp|z3Verify):|:other:\[(?:plan_protocol_gate|in_turn_tool_block|autonomous_blacklist|research)/.test(signature) ? 'yes' : '' }))
+  // Mirror the real exclusions: EXCLUDED_FROM_ROOT_CAUSE (pariGp/z3Verify by tool) + MECHANISM_REJECTION_RE
+  // (`:other:rejected_by_<mechanism>` — the real marker, not the old bracket form).
+  .map(([signature, count]) => ({ signature, count, excluded: /^(?:pariGp|z3Verify):|:other:rejected_by_/i.test(signature) ? 'yes' : '' }))
   .sort((a, b) => b.count - a.count);
 console.log('\nAll failures (incl. excluded — these waste iterations but do NOT trigger the reflection):');
 console.table(fullRows.slice(0, 20));
