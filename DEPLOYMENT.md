@@ -11,6 +11,14 @@ This guide covers three ways to run Philont:
 > TypeScript. The Rust crates (`agent-core`, `agent-node`) are dormant and are
 > **not** part of the build or runtime.
 
+> ### ⚠️ Platform status — please read first
+>
+> philont is developed and **tested on Windows only**. macOS and Linux are **adapted in the code**
+> (OS-specific paths, shells, and native modules are branched per platform) but have **not been tested
+> by the author** — expect rough edges. The runtime is cross-platform in principle; it just hasn't had
+> real mileage outside Windows yet. If you run it on macOS/Linux, please open an issue or PR — whether
+> you hit a problem **or** get it working cleanly. Verified-on reports are as valuable as bug reports.
+
 ---
 
 ## 1. Local from source
@@ -19,20 +27,31 @@ This guide covers three ways to run Philont:
 
 | Component | Version | Why |
 | --- | --- | --- |
-| **Node.js** | ≥ 20 | Runs the entire TypeScript runtime. |
+| **Node.js** | ≥ 20 | Runs the entire TypeScript runtime. Native modules are compiled against this ABI — use the **same** Node version to build and to run. |
 | **npm** | ≥ 10 | Package management. |
-| **C toolchain** | `build-essential` / Xcode CLT / MSVC | Compiles the `better-sqlite3` native module during `npm install`. |
+| **Python 3** | ≥ 3.8 | Required at **build** time — `node-gyp` uses it to compile the native modules (`better-sqlite3`, `sharp`). **It is not bundled** by the Xcode Command Line Tools or the Visual Studio Build Tools, so on macOS/Windows you must install it yourself. |
+| **C/C++ toolchain** | `build-essential` / Xcode CLT / MSVC C++ | Compiles those same native modules during `npm install`. |
 | **API key** | — | An Anthropic- or OpenAI-compatible key (or run with `LLM_PROVIDER=mock` for a no-key smoke test). |
 
-Install a C toolchain if you don't have one:
+Install the build toolchain (C/C++ **and** Python 3) if you don't have it:
 
 ```bash
 # Debian/Ubuntu
 sudo apt-get install -y build-essential python3
+
 # macOS
-xcode-select --install
-# Windows: install "Visual Studio Build Tools" with the Desktop C++ workload
+xcode-select --install        # C/C++ toolchain
+brew install python           # Python 3 — the Xcode CLT no longer ship it
+
+# Windows (install both, then RESTART the terminal so they're on PATH):
+#   1. "Visual Studio Build Tools" → check the "Desktop development with C++" workload
+#   2. Python 3 from python.org or the Microsoft Store (tick "Add python.exe to PATH")
 ```
+
+> **If `npm install` fails building a native module** (`node-gyp` / `gyp ERR!` while compiling
+> `better-sqlite3` or `sharp`), it is almost always a **missing Python 3 or C/C++ toolchain** — install
+> both from above and retry. On Windows, open a **fresh** terminal afterwards so the compiler and Python
+> are on `PATH`. This is the most common first-build failure.
 
 ### Optional — only for specific features
 

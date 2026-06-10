@@ -10,7 +10,9 @@
 
 philont is a self-hostable AI agent that has personality, drives its own learning, and reasons through hard problems step by step. Most open-source agents — OpenClaw, Hermes, and the rest — are **task runners**: you hand them a job, they execute it, they stop. philont is built to be something else: a **being** — an agent with an independent character, intrinsic curiosity, and a compulsion to understand before it acts. It grows with every session, teaches itself from failure, and never pretends to have succeeded when it hasn't.
 
-And because its intelligence lives in the **architecture, not the model**, philont runs sophisticated, fully autonomous work on a model that costs a fraction of the frontier — typically **~100× cheaper per token** than agents that depend on a top-tier model. See [Why a cheap model is enough](#why-a-cheap-model-is-enough).
+Concretely, that means: a **5-layer memory** it carries across every session and channel; a **deductive proof engine** (`deep_explore`) that cracks hard problems by *reasoning*, not by summarising the web; **intrinsic drives** that research and self-review while you're away; mechanism-enforced **honesty** and **plan → review → execute** rigor; a **permission matrix + audit log** on every tool call; **MCP** for any external capability; and one process that reaches you on **WeChat, Telegram, a web UI, or a headless CLI**.
+
+And because its intelligence lives in the **architecture, not the model**, philont runs all of this on a model that costs a fraction of the frontier — typically **~100× cheaper per token** than agents that depend on a top-tier model. Bring your own: Claude, DeepSeek, GLM, Kimi, MiniMax, Gemini, or your own endpoint. See [Why a cheap model is enough](#why-a-cheap-model-is-enough).
 
 ---
 
@@ -86,6 +88,8 @@ philont's `deep_explore` is the opposite kind of tool: **depth-first deductive r
 The two are complementary, and philont can chain them: have the agent gather known results with its web tools, **inject them as `assumptions`**, then let `deep_explore` reason deductively from there — breadth feeding depth.
 
 **Not just mathematics.** Today `deep_explore`'s verification tools are formal/mathematical — **z3** (SMT solver) and **PARI/GP** (number-theory CAS) — so it is strongest on math, logic, and other formal problems. But the reasoning tree itself is **domain-agnostic**: the pattern is always *decompose → claim → **verify***, and the only domain-specific piece is the **verification tooth**. Swap that and the same engine reaches new fields — a **code executor** for algorithm-correctness proofs and counterexample search (reasoning *about* code, not just running it), a simulator for the physical sciences, a property-based / unit-test harness for engineering. Extending `deep_explore` beyond math is a matter of **adding a verifier, not rewriting the engine**.
+
+> **A note from the author — a layman, not a mathematician.** I spent about a week pointing `deep_explore` at the **Goldbach conjecture**. It built and pruned a real reasoning tree and closed off many dead ends, but it did **not** produce a breakthrough — and I'm not equipped to judge how close any of it came. If you're a mathematician (or a researcher in any formal field), I'd genuinely love for you to try philont on real problems and tell me where it helps and where it falls short. That feedback is exactly what would make `deep_explore` better.
 
 ---
 
