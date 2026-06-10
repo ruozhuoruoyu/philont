@@ -70,6 +70,25 @@ The result: tasks that would otherwise demand a frontier model run comfortably o
 
 ---
 
+## Deep reasoning, not deep research
+
+Most "research agents" — including Google's **Deep Research** — are **breadth-first**: they search the web, read many sources, and synthesise a cited summary of what is *already known*. That is retrieval and summarisation.
+
+philont's `deep_explore` is the opposite kind of tool: **depth-first deductive reasoning**, to derive something *new*. It keeps a persistent **proof tree** across turns — decompose a hard proposition into sub-goals, attack the most promising one, prove or refute it, backtrack on dead ends, and accumulate established lemmas — and a "proved" claim must survive **independent adversarial reviewers** before the tree accepts it. Inside a round it deliberately does **not** browse the web (that would let the model retrieve instead of reason); it grounds every claim in deduction and computation. A long session can even [auto-advance in the background](#configuration) — it reports progress and stops itself when solved or stuck.
+
+|  | Google Deep Research | philont `deep_explore` |
+|---|---|---|
+| Goal | synthesise what's **known** | derive / prove what's **new** |
+| Method | broad web search → read sources → cited report | decompose → prove / refute / backtrack → verify |
+| Grounding | external web sources | deduction + computation |
+| Output | a long cited report | a proof tree (lemmas · dead ends · open frontier) |
+
+The two are complementary, and philont can chain them: have the agent gather known results with its web tools, **inject them as `assumptions`**, then let `deep_explore` reason deductively from there — breadth feeding depth.
+
+**Not just mathematics.** Today `deep_explore`'s verification tools are formal/mathematical — **z3** (SMT solver) and **PARI/GP** (number-theory CAS) — so it is strongest on math, logic, and other formal problems. But the reasoning tree itself is **domain-agnostic**: the pattern is always *decompose → claim → **verify***, and the only domain-specific piece is the **verification tooth**. Swap that and the same engine reaches new fields — a **code executor** for algorithm-correctness proofs and counterexample search (reasoning *about* code, not just running it), a simulator for the physical sciences, a property-based / unit-test harness for engineering. Extending `deep_explore` beyond math is a matter of **adding a verifier, not rewriting the engine**.
+
+---
+
 ## Quick start
 
 > **Platform status:** Developed and tested on **Windows only**. macOS and Linux have not been tested by the author — the runtime is cross-platform in principle, but rough edges are expected. If you run philont on macOS or Linux and hit issues (or get it working), please open an issue or PR.
