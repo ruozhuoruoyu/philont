@@ -361,6 +361,206 @@ export const KNOWN_BARRIERS: readonly Barrier[] = [
       'trade-off among the axioms.',
     source: 'Arrow 1951; Gibbard 1973; Satterthwaite 1975.',
   },
+  {
+    id: 'tarski-undefinability',
+    title: 'Tarski undefinability — arithmetic truth is not arithmetically definable',
+    tags: ['tarski', 'truth', 'definability', 'logic', 'self-reference', 'no-go'],
+    goalTags: [
+      'truth predicate', 'define a truth predicate', 'definability of truth', 'arithmetic truth',
+      'truth definition for arithmetic', 'self-referential truth predicate',
+    ],
+    methodTags: [],
+    blocks:
+      'Tarski’s undefinability theorem: the set of (Gödel numbers of) TRUE arithmetic sentences is not ' +
+      'definable by any arithmetic formula. You cannot write a predicate True(x) INSIDE arithmetic that holds ' +
+      'of exactly the true sentences — otherwise the liar sentence "I am not true" is constructible. (Distinct ' +
+      'from Gödel: this is about DEFINABILITY of truth, not provability.)',
+    whyHere:
+      'Any plan to build an internal, total truth predicate for a language in that same language is self-defeating. ' +
+      'Truth for a language lives one level up.',
+    circumvention:
+      'Define truth in a STRONGER metalanguage (Tarski’s hierarchy of languages), or use a PARTIAL / typed truth ' +
+      'predicate (Kripke’s fixed-point theory of truth) rather than a total one in the object language.',
+    source: 'Tarski 1936 (the concept of truth in formalized languages).',
+  },
+  {
+    id: 'flp-consensus',
+    title: 'FLP impossibility — no deterministic async consensus with one crash',
+    tags: ['flp', 'consensus', 'distributed-systems', 'asynchronous', 'fault-tolerance', 'no-go'],
+    goalTags: [
+      'deterministic consensus', 'asynchronous consensus', 'consensus protocol', 'distributed consensus',
+      'agreement protocol', 'guarantee consensus', 'consensus in an asynchronous',
+    ],
+    // FLP needs async + deterministic + the possibility of one crash. Randomization or partial synchrony
+    // escapes it, so a goal that does not name async/deterministic stays goal-hard.
+    methodTags: ['deterministic', 'asynchronous'],
+    blocks:
+      'FLP (Fischer–Lynch–Paterson): in an asynchronous system where even ONE process may crash, no ' +
+      'DETERMINISTIC protocol can guarantee consensus — i.e. you cannot have agreement + validity + GUARANTEED ' +
+      'termination together. Safety and guaranteed liveness cannot both hold deterministically under asynchrony.',
+    whyHere:
+      'A goal of "a deterministic protocol that always reaches agreement and always terminates in an async ' +
+      'network tolerating a crash" is provably unattainable — there is always an admissible infinite execution.',
+    circumvention:
+      'Relax ONE assumption: add randomization (Ben-Or) or unreliable failure detectors (Chandra–Toueg) for ' +
+      'probabilistic / eventual termination; assume partial synchrony or timeouts (Paxos, Raft, PBFT); or ' +
+      'weaken liveness to "terminates when the network is eventually timely".',
+    source: 'Fischer, Lynch & Paterson 1985.',
+  },
+  {
+    id: 'cap-theorem',
+    title: 'CAP theorem — no store is Consistent + Available under a Partition',
+    tags: ['cap', 'distributed-systems', 'consistency', 'availability', 'partition', 'no-go'],
+    goalTags: [
+      'cap theorem', 'strongly consistent and always available', 'linearizable and always available',
+      'consistency and availability under partition', 'consistent available partition-tolerant',
+      'always-available strongly consistent',
+    ],
+    methodTags: [],
+    blocks:
+      'CAP theorem (Brewer; Gilbert–Lynch): a distributed data store cannot simultaneously guarantee ' +
+      'Consistency (linearizability), Availability (every request gets a non-error response), and Partition ' +
+      'tolerance. When a network partition occurs you must give up C or A — you cannot keep both.',
+    whyHere:
+      'Designing a system that is linearizable AND always-available AND survives partitions is asking for all ' +
+      'three at once, which is exactly the forbidden combination during a partition.',
+    circumvention:
+      'Choose the two you need under partition: CP (refuse / delay some requests to stay consistent) or AP ' +
+      '(stay available, reconcile later via eventual consistency / CRDTs). PACELC also reminds you to pick ' +
+      'latency-vs-consistency in the no-partition case.',
+    source: 'Brewer 2000 (conjecture); Gilbert & Lynch 2002 (proof).',
+  },
+  {
+    id: 'no-free-lunch',
+    title: 'No-Free-Lunch — no universally best optimizer or learner',
+    tags: ['no-free-lunch', 'optimization', 'machine-learning', 'search', 'nfl', 'no-go'],
+    goalTags: [
+      'no free lunch', 'universally best optimizer', 'optimizer that beats all', 'universally optimal algorithm',
+      'best for all problems', 'best optimization algorithm for all', 'outperforms all others on every',
+      'universal learner', 'general-purpose optimizer that is always best',
+    ],
+    methodTags: [],
+    blocks:
+      'No-Free-Lunch theorems (Wolpert–Macready): averaged over ALL objective functions (resp. all data ' +
+      'distributions), every optimization / search algorithm has identical expected performance, and no ' +
+      'learner is best on all tasks. There is no universally superior optimizer or learning algorithm.',
+    whyHere:
+      'Chasing "the algorithm that wins on every problem" is chasing something NFL rules out — superiority on ' +
+      'one class is paid for by inferiority on another.',
+    circumvention:
+      'Exploit STRUCTURE: NFL averages over all problems including pathological ones; real problems carry ' +
+      'priors (smoothness, low effective dimension, sparsity) a tailored method exploits. Aim for "best on THIS ' +
+      'problem class", with the inductive bias stated.',
+    source: 'Wolpert & Macready 1997.',
+  },
+  {
+    id: 'universal-lossless-compression',
+    title: 'No universal lossless compressor (counting / Shannon bound)',
+    tags: ['compression', 'information-theory', 'pigeonhole', 'shannon', 'no-go'],
+    goalTags: [
+      'compress any file', 'compress every file', 'compress arbitrary data', 'universal lossless compression',
+      'lossless compressor that always', 'shrink any input', 'compress random data', 'recursively compress',
+    ],
+    methodTags: [],
+    blocks:
+      'A counting (pigeonhole) argument: a lossless code cannot map every n-bit input to a strictly shorter ' +
+      'output — there are 2^n inputs but only 2^n−1 shorter strings, so some inputs must GROW. No scheme ' +
+      'compresses arbitrary / random data; lossless gains are bounded below by Shannon entropy.',
+    whyHere:
+      'A "compresses any file (and you can re-run it to shrink further)" claim is impossible by counting — a ' +
+      'recurring crank claim. Compression only helps on REDUNDANT data.',
+    circumvention:
+      'Compress only structured / low-entropy data, toward its Shannon entropy; for incompressible data accept ' +
+      'no gain; use LOSSY compression where the application tolerates loss.',
+    source: 'Pigeonhole / counting argument; Shannon source-coding theorem.',
+  },
+  {
+    id: 'kolmogorov-uncomputable',
+    title: 'Kolmogorov complexity is uncomputable — no shortest-program finder',
+    tags: ['kolmogorov', 'complexity', 'uncomputable', 'compression', 'minimal-program', 'no-go'],
+    goalTags: [
+      'kolmogorov complexity', 'shortest program', 'compute k(x)', 'shortest description of',
+      'minimal program for', 'shortest program that outputs', 'smallest program that',
+    ],
+    methodTags: [],
+    blocks:
+      'Kolmogorov complexity K(x) — the length of the shortest program outputting x — is UNCOMPUTABLE: no ' +
+      'algorithm computes K, nor finds the shortest program for an arbitrary x (a Berry-paradox / halting ' +
+      'argument). "Optimal compression" in the Kolmogorov sense is unattainable in general.',
+    whyHere:
+      'A goal of "an algorithm that returns the minimal program / true complexity of any input" is asking for an ' +
+      'uncomputable function — no clever search will compute it for all x.',
+    circumvention:
+      'Use computable UPPER bounds (real compressors gzip/PPM/bzip2 as proxies; normalized compression ' +
+      'distance), or resource-bounded complexity (time-bounded Kt). The exact value is out of reach.',
+    source: 'Solomonoff; Kolmogorov; Chaitin (incompressibility & uncomputability of K).',
+  },
+  {
+    id: 'no-cloning',
+    title: 'No-cloning theorem — an unknown quantum state cannot be copied',
+    tags: ['no-cloning', 'quantum', 'qubit', 'unitarity', 'no-broadcasting', 'no-go'],
+    goalTags: [
+      'clone a quantum state', 'copy an unknown quantum state', 'unknown quantum state', 'quantum cloning',
+      'clone an arbitrary quantum', 'duplicate a qubit', 'copy an arbitrary qubit', 'no-cloning',
+      'perfect quantum copy', 'clone an unknown state',
+    ],
+    methodTags: [],
+    blocks:
+      'The no-cloning theorem: no physical (unitary) operation can create an independent, identical copy of an ' +
+      'arbitrary UNKNOWN quantum state — linearity of quantum mechanics forbids a universal copier. Corollaries: ' +
+      'no-deleting and no-broadcasting of arbitrary states.',
+    whyHere:
+      'A protocol that "copies any incoming qubit" (e.g. to amplify a signal or beat the uncertainty limit) is ' +
+      'ruled out for unknown states; this also underpins why quantum money / QKD are secure.',
+    circumvention:
+      'Copy a KNOWN state (just re-prepare it) or states from a fixed ORTHOGONAL set; teleportation MOVES a ' +
+      'state (destroying the original); approximate / probabilistic cloning exists only with bounded fidelity.',
+    source: 'Wootters & Zurek 1982; Dieks 1982.',
+  },
+  {
+    id: 'perpetual-motion',
+    title: 'Perpetual motion is impossible (laws of thermodynamics)',
+    tags: ['thermodynamics', 'perpetual-motion', 'entropy', 'carnot', 'energy-conservation', 'no-go'],
+    goalTags: [
+      'perpetual motion', 'perpetuum mobile', 'over-unity', 'overunity', 'free energy device',
+      '100% efficient engine', '100% efficient heat engine', 'exceed carnot', 'beat carnot efficiency',
+      "maxwell's demon", 'maxwells demon', 'machine that runs forever without',
+    ],
+    methodTags: [],
+    blocks:
+      'The laws of thermodynamics forbid perpetual motion: a machine producing work with no energy input ' +
+      '(1st kind — violates energy conservation), or one converting heat entirely to work in a cycle / lowering ' +
+      'total entropy (2nd kind — violates the 2nd law). No heat engine beats the Carnot efficiency; Maxwell’s ' +
+      'demon yields no net work once its own information-erasure cost is counted.',
+    whyHere:
+      'An over-unity / free-energy / 100%-efficient-cycle design is impossible IN PHYSICS, not merely unbuilt. ' +
+      'Look for the hidden energy source or the ignored entropy increase.',
+    circumvention:
+      'Improve efficiency only TOWARD the Carnot limit; harvest a genuine external energy source; and note ' +
+      'Maxwell’s demon must spend energy to erase information (Landauer’s principle), preserving the 2nd law.',
+    source: '1st & 2nd laws of thermodynamics; Carnot; Landauer 1961.',
+  },
+  {
+    id: 'hairy-ball',
+    title: 'Hairy-ball theorem — no nonvanishing tangent field on an even sphere',
+    tags: ['topology', 'hairy-ball', 'vector-field', 'euler-characteristic', 'sphere', 'no-go'],
+    goalTags: [
+      'hairy ball', 'comb a hairy ball', 'comb the sphere', 'nonvanishing tangent vector field',
+      'nonzero vector field on the sphere', 'tangent vector field on s^2', 'tangent field on the sphere',
+    ],
+    methodTags: [],
+    blocks:
+      'The hairy-ball theorem: there is no nonvanishing continuous tangent vector field on an even-dimensional ' +
+      'sphere (notably S²). Every continuous tangent field on S² must vanish somewhere — you cannot comb a ' +
+      'hairy ball flat without a cowlick (the index sum equals the Euler characteristic, 2 for S²).',
+    whyHere:
+      'A goal of "a smooth, everywhere-nonzero tangent flow on the 2-sphere" (e.g. a global wind with no calm ' +
+      'point) is topologically impossible.',
+    circumvention:
+      'Odd-dimensional spheres (S¹, S³, …) DO admit nonvanishing tangent fields; on S² allow the field to vanish ' +
+      'at ≥1 point (a single source/sink suffices), or drop tangency / continuity.',
+    source: 'Poincaré; Brouwer (hairy-ball theorem).',
+  },
 ];
 
 // ── matching ────────────────────────────────────────────────────────────────────────────────────
@@ -452,7 +652,10 @@ export const barrierCheckTool: Tool = {
     'relativization / natural-proofs / algebrization (P vs NP), undecidability (halting / Hilbert 10th / word ' +
     'problem) and Rice (program properties), independence from ZFC (CH), Gödel 2nd incompleteness, ' +
     'Abel–Ruffini (general quintic), ruler-and-compass impossibilities (trisection / doubling the cube / ' +
-    'squaring the circle), non-elementary antiderivatives (Liouville/Risch), and Arrow (voting). ' +
+    'squaring the circle), non-elementary antiderivatives (Liouville/Risch), Tarski undefinability, ' +
+    'FLP & CAP (distributed systems), No-Free-Lunch (optimization/ML), no universal lossless compression ' +
+    '& uncomputable Kolmogorov complexity (information), no-cloning (quantum), perpetual motion ' +
+    '(thermodynamics), the hairy-ball theorem (topology), and Arrow (voting). ' +
     'Call this BEFORE committing rounds to a hard conjecture: if your method is blocked, the tool names the ' +
     'obstruction and the only known circumventions, so you can switch method or record the wall honestly ' +
     'instead of grinding it. Query with the goal + intended method (e.g. "prove binary goldbach with the ' +

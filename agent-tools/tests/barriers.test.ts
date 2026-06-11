@@ -125,6 +125,44 @@ test('tightened tags: deciding a SPECIFIC polynomial solvable-by-radicals is not
   assert.ok(matchBarriers('a radical formula for the general quintic').some((m) => m.barrier.id === 'abel-ruffini'));
 });
 
+test('FLP: async deterministic consensus applies; plain "consensus protocol" stays goal-hard', () => {
+  const asyncCase = matchBarriers('a deterministic consensus protocol for an asynchronous network with crash faults');
+  const a = asyncCase.find((m) => m.barrier.id === 'flp-consensus');
+  assert.ok(a && a.severity === 'applies');
+  const plain = matchBarriers('design a consensus protocol for a synchronous cluster');
+  const b = plain.find((m) => m.barrier.id === 'flp-consensus');
+  assert.ok(b && b.severity === 'goal-hard', 'synchronous → solvable → not "applies"');
+});
+
+test('CAP / No-Free-Lunch / no-cloning / perpetual-motion / hairy-ball / Tarski all fire', () => {
+  const cases: Array<[string, string]> = [
+    ['build a linearizable and always available store that survives partitions', 'cap-theorem'],
+    ['a universally best optimizer that outperforms all others on every problem', 'no-free-lunch'],
+    ['clone an unknown quantum state to amplify the signal', 'no-cloning'],
+    ['design an over-unity free energy device / perpetual motion machine', 'perpetual-motion'],
+    ['a nonvanishing tangent vector field on s^2 (comb the sphere)', 'hairy-ball'],
+    ['define a truth predicate for arithmetic inside arithmetic', 'tarski-undefinability'],
+  ];
+  for (const [q, id] of cases) {
+    assert.ok(
+      matchBarriers(q).some((m) => m.barrier.id === id && m.severity === 'applies'),
+      `${id} should APPLY for: ${q}`,
+    );
+  }
+});
+
+test('information-theory no-gos: universal compression (counting) + Kolmogorov uncomputability', () => {
+  assert.ok(matchBarriers('an algorithm to compress any file losslessly').some((m) => m.barrier.id === 'universal-lossless-compression'));
+  assert.ok(matchBarriers('compute the kolmogorov complexity / shortest program for x').some((m) => m.barrier.id === 'kolmogorov-uncomputable'));
+});
+
+test('new cards do not false-fire on benign neighbours', () => {
+  // "Gibbs free energy" must NOT trip perpetual-motion (only "free energy device" / over-unity should).
+  assert.ok(!matchBarriers('compute the Gibbs free energy of the reaction').some((m) => m.barrier.id === 'perpetual-motion'));
+  // a normal "minimal description length model selection" goal is a method, not "compute K(x)".
+  assert.ok(!matchBarriers('use MDL for model selection').some((m) => m.barrier.id === 'kolmogorov-uncomputable'));
+});
+
 test('every barrier card is well-formed (ids unique, required fields present)', () => {
   const ids = new Set<string>();
   for (const b of KNOWN_BARRIERS) {
