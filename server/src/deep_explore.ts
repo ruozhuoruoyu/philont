@@ -61,9 +61,12 @@
 import type { Tool, ToolDefinition, ToolResult } from '@agent/policy';
 import {
   runMiniAgentLoop,
+  matchBarriers,
+  renderBarrierAdvisory,
   type MiniLoopLLMClient,
   type MiniLoopToolRunResult,
   type ReasoningConfig,
+  type BarrierMatch,
 } from '@agent/tools';
 import {
   ReasoningNodeNotFoundError,
@@ -221,6 +224,87 @@ export function buildStuckDirective(noProgressRounds: number): string {
     `node is genuinely unreachable, reason_record it as a dead_end to prune the frontier. Make at least one ` +
     `concrete tree commit (reason_decompose or reason_record) this round.`
   );
+}
+
+/**
+ * Strict progress (Tooth B): the stuck counter must not be reset by trivial churn. A round whose only
+ * output is decomposing low-value nodes or "proving" deep low-value sub-lemmas is padding a wall, not a
+ * breakthrough — yet the old `madeProgress` (any decompose/record) reset noProgressRounds every such
+ * round, so the frontier could grind for 10 rounds (observed: the Goldbach run) without ever tripping the
+ * pivot/escalate. With strict progress ON (default), only SUBSTANTIVE rounds reset the counter; trivial
+ * churn accrues toward escalation, surfacing the stall honestly. env PHILONT_DEEP_EXPLORE_STRICT_PROGRESS=0
+ * reverts to the old behaviour. Relies on the value-scorer; with VALUE_GUIDED off all nodes are unscored
+ * → every commit counts → identical to legacy (safe no-op).
+ */
+const STRICT_PROGRESS = process.env.PHILONT_DEEP_EXPLORE_STRICT_PROGRESS !== '0';
+/** Value at/above which a proved/decomposed node counts as substantive (not trivial). env PHILONT_DEEP_EXPLORE_SUBSTANTIVE_VALUE, default 0.35, range [0,1]. */
+const SUBSTANTIVE_VALUE = (() => {
+  const n = Number(process.env.PHILONT_DEEP_EXPLORE_SUBSTANTIVE_VALUE);
+  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.35;
+})();
+
+/**
+ * Did this round make SUBSTANTIVE progress, or just trivial churn around a wall? Substantive =
+ *  (1) a node went open→refuted/dead_end (a real kill / backtrack), OR
+ *  (2) a node near the root (depth ≤ 1) was settled (matters regardless of value), OR
+ *  (3) a node that was settled or decomposed was rated ≥ threshold by the value-scorer (or is unscored →
+ *      benefit of the doubt — fresh sessions / value-guidance-off never false-trip).
+ * NOT substantive: only decomposing, or only "proving" deep low-value sub-lemmas — the trivial-lemma
+ * padding signature (e.g. re-proving an elementary CRT counting lemma each round). Pure: diffs snapshots.
+ */
+export function roundWasSubstantive(
+  before: ReasoningNode[],
+  after: ReasoningNode[],
+  threshold: number,
+): boolean {
+  const beforeById = new Map(before.map((n) => [n.id, n]));
+  // 1+2. Any node that went open → settled this round.
+  for (const n of after) {
+    const prev = beforeById.get(n.id);
+    if (!prev || prev.status !== 'open' || n.status === 'open') continue;
+    if (n.status === 'refuted' || n.status === 'dead_end') return true; // kills / backtracks are real
+    if (n.depth <= 1) return true; // settling something near the root matters regardless of value
+    if (n.value === null || n.value >= threshold) return true; // a non-trivial proof
+    // else: proved a deep, low-value node → incremental; keep checking
+  }
+  // 3. Decomposition counts only if it attacked an important (or unscored) node — not low-value busywork.
+  const decomposedParents = new Set(
+    after.filter((n) => !beforeById.has(n.id) && n.parentId).map((n) => n.parentId as string),
+  );
+  for (const pid of decomposedParents) {
+    const p = beforeById.get(pid);
+    if (!p || p.value === null || p.value >= threshold) return true;
+  }
+  return false;
+}
+
+/**
+ * Feasibility / no-go gate (the "parity-problem" tooth). Before grinding rounds on a goal, match it
+ * (+ the method it names, + assumptions) against the KNOWN_BARRIERS library — meta-mathematical no-go
+ * results proving a class of method cannot reach a class of goal (parity problem → a sieve can't prove
+ * binary Goldbach; relativization → diagonalization can't separate P vs NP; undecidability; ZFC
+ * independence; …). When a barrier APPLIES we inject it into every round prompt (so the reasoning loop
+ * names the blocked step instead of papering it with trivial sub-lemmas) and warn the user once at start.
+ * Advisory, never a hard block. In-memory, process-scoped, RE-DERIVABLE from session.goal on demand (so it
+ * also fires after a restart on a `continue`) — same pattern as sessionToolFailures, no schema change.
+ * Disable with env PHILONT_DEEP_EXPLORE_BARRIERS=0.
+ */
+const BARRIERS_ENABLED = process.env.PHILONT_DEEP_EXPLORE_BARRIERS !== '0';
+const sessionBarriers = new Map<string, BarrierMatch[]>();
+function ensureBarriers(session: ReasoningSession): BarrierMatch[] {
+  if (!BARRIERS_ENABLED) return [];
+  const cached = sessionBarriers.get(session.id);
+  if (cached) return cached;
+  const matches = matchBarriers([session.goal, ...session.assumptions].join('\n'));
+  sessionBarriers.set(session.id, matches);
+  return matches;
+}
+/** Prompt lines surfacing the applicable barriers for this session (empty if none / disabled). */
+function renderSessionBarriers(sessionId: string): string[] {
+  const matches = sessionBarriers.get(sessionId);
+  if (!matches || matches.length === 0) return [];
+  const block = renderBarrierAdvisory(matches);
+  return block ? ['', block] : [];
 }
 
 /**
@@ -411,6 +495,7 @@ export const DEEP_EXPLORE_RESEARCH_ALLOW: ReadonlySet<string> = new Set([
   'pariGp',
   'magnitude',
   'lemmaLookup',
+  'barrierCheck',
 ]);
 
 // ── Pure functions (independently testable) ─────────────────────────────────────────────────────
@@ -634,6 +719,10 @@ export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode
     for (const a of session.assumptions) lines.push(`- ${a}`);
   }
 
+  // Feasibility / no-go gate: surface any KNOWN BARRIER for this goal/method up front, so the blocked
+  // step is named before a node is picked (not discovered round 10 after padding the wall with lemmas).
+  for (const l of renderSessionBarriers(session.id)) lines.push(l);
+
   const rawFrontier = computeFrontier(nodes);
   const frontier = VALUE_GUIDED ? rankFrontier(rawFrontier, nodes, UCB_C, NOVELTY_W) : rawFrontier;
   const proved = nodes.filter((n) => n.status === 'proved');
@@ -687,6 +776,7 @@ export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode
   lines.push('- pariGp(script): **external computation** — use PARI/GP for number-theory/algebra computation and counterexample search (factoring, primality certificates, elliptic curves, enumeration, concrete values). Prefer it over z3 for number theory. Use print() to output your conclusion.');
   lines.push('- magnitude(action, …): **asymptotic order-of-growth algebra** — do NOT track magnitudes like N^(3/2)·(log N)^-A in your head (you WILL slip). action="compare" decides X=o(Y)/O(Y); action="closes" takes a target + a sum of bounds (terms[]) and decides whether they compose to beat it — and with free parameters {A,B,κ,…} whether a choice EXISTS that closes it (returns a witness, or the binding obstruction). This is how you settle an "estimates balance" / parameter-choice step rigorously instead of hand-waving.');
   lines.push('- lemmaLookup(query): **retrieve a standard estimate instead of mis-remembering it** — precise hypotheses + magnitude + the common MISUSE for the classic tools (PNT/Parseval weights, Vinogradov minor-arc sup, sup×mean-square arc integrals, Siegel–Walfisz moduli range, decoupling/BDG applicability, large sieve, …). Each card\'s magnitude is in `magnitude`-tool syntax, so look it up then feed the shape into a closure check. Empty query lists the index.');
+  lines.push('- barrierCheck(query): **check for a known no-go BEFORE grinding a wall** — match your goal + intended method against catalogued meta-mathematical barriers (parity problem → sieves can\'t do binary Goldbach; relativization/natural-proofs/algebrization → P vs NP; undecidability; ZFC independence; Abel–Ruffini). If blocked, it names the obstruction + the only circumventions, so you route through one explicitly or reason_record the node as a dead_end instead of padding the wall with trivial lemmas.');
   lines.push('- memory-recall tools (searchNotes/getFact/readFile, etc.): **auxiliary only** — to recall your own earlier conclusions/computations, not a substitute for reasoning.');
   lines.push('');
   lines.push('## How to reason (discipline)');
@@ -1446,6 +1536,10 @@ export function createDeepExploreTool(
         output: `This reasoning session has used ${session.budgetSpent} tokens, hitting the budget cap (${SESSION_TOKEN_BUDGET}); paused. Continue later with a fresh angle, or treat it as stuck.`,
       };
     }
+    // Feasibility gate: populate (or re-derive after a restart) this session's known barriers so
+    // renderTreePrompt can inject them. Cheap, pure, cached per session.
+    ensureBarriers(session);
+
     // Wall-clock budget for the WHOLE round (scoring + mini-loop). The timer starts HERE, before the
     // value-guided scoring, so the round's total wall-clock stays under the cap. Previously the timer
     // only covered the mini-loop, so a large-frontier scoring call (one LLM pass over all open nodes)
@@ -1559,7 +1653,10 @@ export function createDeepExploreTool(
       summary.newlyRefuted.length > 0 ||
       summary.newDeadEnds.length > 0 ||
       summary.decomposedInto > 0;
-    const noProgressRounds = reasoning.recordRoundProgress(session.id, madeProgress);
+    // Tooth B: only SUBSTANTIVE progress resets the stuck counter — trivial churn (decomposing /
+    // "proving" low-value sub-lemmas around a wall) accrues toward pivot/escalate instead of masking it.
+    const substantive = STRICT_PROGRESS ? roundWasSubstantive(before, after, SUBSTANTIVE_VALUE) : madeProgress;
+    const noProgressRounds = reasoning.recordRoundProgress(session.id, substantive);
     // Post-loop convergence judgment (sub-LLM is not given reason_close).
     const status = judgeConvergence(after);
     if (status !== 'active') reasoning.setSessionStatus(session.id, status);
@@ -1574,13 +1671,20 @@ export function createDeepExploreTool(
             ? `\n(this round hit the ${Math.round(roundDeadlineMs / 60_000)}-minute time cap; tree saved — reply "continue" to keep going)`
             : '\n(this round was aborted; tree saved, you can continue)'
         : '';
+    // Tooth B: when a round made nominal commits but no SUBSTANTIVE progress, say so — so a tree that
+    // grows trivial lemmas around a wall reads as churn, not as a win.
+    const churnNote =
+      STRICT_PROGRESS && madeProgress && !substantive
+        ? `\n(note: this round only expanded the tree / settled low-value nodes — the core frontier did ` +
+          `not move, so it does not count as substantive progress.)`
+        : '';
     // After enough stuck rounds, escalate to the user instead of grinding the same frontier silently.
     const stuckNote =
-      status === 'active' && !madeProgress && noProgressRounds >= STUCK_ESCALATE_AFTER
-        ? `\n⚠️ No progress for ${noProgressRounds} consecutive rounds — this frontier looks stuck. ` +
+      status === 'active' && !substantive && noProgressRounds >= STUCK_ESCALATE_AFTER
+        ? `\n⚠️ No substantive progress for ${noProgressRounds} consecutive rounds — this frontier looks stuck. ` +
           `Consider redirecting: start a fresh angle (a different framing of the problem), or tell me which sub-problem to focus on.`
         : '';
-    return { success: true, output: `${text}${tail}${stuckNote}\nsession id: ${session.id}` };
+    return { success: true, output: `${text}${tail}${churnNote}${stuckNote}\nsession id: ${session.id}` };
   }
 
   // Experimental-math (explore) round: compute first, then conjecture. Reuses the same
@@ -1719,6 +1823,18 @@ export function createDeepExploreTool(
           ? params.assumptions.filter((a): a is string => typeof a === 'string' && a.trim().length > 0)
           : [];
         const { session } = reasoning.createSession({ goal, assumptions, ownerSessionId: owner });
+        // Feasibility gate: if this goal/method hits a KNOWN BARRIER, warn the user ONCE up front (before
+        // any round burns time) — the parity-problem tooth. Advisory; exploration still proceeds, but the
+        // barrier is named so the user can redirect to a circumvention instead of grinding the wall.
+        const applied = ensureBarriers(session).filter((m) => m.severity === 'applies');
+        if (applied.length) {
+          deps.onMilestone?.(
+            `⛔ Feasibility check — this goal/method hits a KNOWN BARRIER before any round runs:\n\n` +
+              `${renderBarrierAdvisory(applied)}\n\n` +
+              `This is advisory — I'll still explore, but the barrier-blocked step is the real obstruction; ` +
+              `consider redirecting to a circumvention above.`,
+          );
+        }
         return runRound(session);
       }
 

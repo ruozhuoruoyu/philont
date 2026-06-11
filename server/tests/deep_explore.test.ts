@@ -33,6 +33,7 @@ import {
   buildStuckDirective,
   buildDiscoverPrompt,
   createDeepExploreTool,
+  roundWasSubstantive,
 } from '../src/deep_explore.js';
 
 function node(over: Partial<ReasoningNode>): ReasoningNode {
@@ -697,4 +698,67 @@ test('buildStuckDirective: 未到阈值为空,达到阈值强制换路', () => {
   assert.match(buildStuckDirective(2), /STUCK/);
   assert.match(buildStuckDirective(2), /FUNDAMENTALLY different technique|reason_decompose|dead_end/);
   assert.match(buildStuckDirective(4), /4 round/);
+});
+
+// ── Tooth B: substantive-progress gate (trivial churn must not reset the stuck counter) ───────────
+
+test('roundWasSubstantive: settling a node near the root counts (depth<=1)', () => {
+  const before = [node({ id: 'r', parentId: null, depth: 0, status: 'open' })];
+  const after = [node({ id: 'r', parentId: null, depth: 0, status: 'proved' })];
+  assert.equal(roundWasSubstantive(before, after, 0.35), true);
+});
+
+test('roundWasSubstantive: a kill / backtrack (refuted or dead_end) always counts', () => {
+  const before = [node({ id: 'd', depth: 5, value: 0.1, status: 'open' })];
+  const afterDead = [node({ id: 'd', depth: 5, value: 0.1, status: 'dead_end' })];
+  const afterRef = [node({ id: 'd', depth: 5, value: 0.1, status: 'refuted' })];
+  assert.equal(roundWasSubstantive(before, afterDead, 0.35), true);
+  assert.equal(roundWasSubstantive(before, afterRef, 0.35), true);
+});
+
+test('roundWasSubstantive: proving a DEEP LOW-VALUE node is trivial churn → false', () => {
+  // The Goldbach pathology: re-proving an elementary low-value sub-lemma deep in the tree.
+  const before = [node({ id: 'x', depth: 4, value: 0.1, status: 'open' })];
+  const after = [node({ id: 'x', depth: 4, value: 0.1, status: 'proved' })];
+  assert.equal(roundWasSubstantive(before, after, 0.35), false);
+});
+
+test('roundWasSubstantive: proving a deep HIGH-VALUE node counts', () => {
+  const before = [node({ id: 'x', depth: 4, value: 0.8, status: 'open' })];
+  const after = [node({ id: 'x', depth: 4, value: 0.8, status: 'proved' })];
+  assert.equal(roundWasSubstantive(before, after, 0.35), true);
+});
+
+test('roundWasSubstantive: decomposing a low-value node is churn; decomposing an important one counts', () => {
+  // low-value parent decomposed → churn
+  const beforeLow = [node({ id: 'p', depth: 3, value: 0.1, status: 'open' })];
+  const afterLow = [
+    node({ id: 'p', depth: 3, value: 0.1, status: 'open' }),
+    node({ id: 'p1', parentId: 'p', depth: 4, status: 'open' }),
+    node({ id: 'p2', parentId: 'p', depth: 4, status: 'open' }),
+  ];
+  assert.equal(roundWasSubstantive(beforeLow, afterLow, 0.35), false);
+  // high-value parent decomposed → real attack on the core
+  const beforeHi = [node({ id: 'p', depth: 3, value: 0.9, status: 'open' })];
+  const afterHi = [
+    node({ id: 'p', depth: 3, value: 0.9, status: 'open' }),
+    node({ id: 'p1', parentId: 'p', depth: 4, status: 'open' }),
+  ];
+  assert.equal(roundWasSubstantive(beforeHi, afterHi, 0.35), true);
+});
+
+test('roundWasSubstantive: unscored nodes get benefit of the doubt (fresh-session safety)', () => {
+  // value=null (no scorer ran yet) → first decomposition of the root must still count as progress.
+  const before = [node({ id: 'r', parentId: null, depth: 0, value: null, status: 'open' })];
+  const after = [
+    node({ id: 'r', parentId: null, depth: 0, value: null, status: 'open' }),
+    node({ id: 'a', parentId: 'r', depth: 1, value: null, status: 'open' }),
+  ];
+  assert.equal(roundWasSubstantive(before, after, 0.35), true);
+});
+
+test('roundWasSubstantive: a round with no settle and no decompose is not substantive', () => {
+  const before = [node({ id: 'x', depth: 2, value: 0.9, status: 'open' })];
+  const after = [node({ id: 'x', depth: 2, value: 0.9, status: 'open' })]; // unchanged
+  assert.equal(roundWasSubstantive(before, after, 0.35), false);
 });

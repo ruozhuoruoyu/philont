@@ -19,7 +19,9 @@ import { createSecuredHttpTool, type SecuredHttpOptions } from './network/secure
 
 // ── Categorized exports ───────────────────────────────
 export { readFileTool, writeFileTool, deleteFileTool, moveFileTool, listDirTool, inspectPathTool, grepTool, globTool, patchTool } from './fs/index.js';
-export { shellTool, processTool, z3VerifyTool, pariGpTool, magnitudeTool, lemmaLookupTool } from './runtime/index.js';
+export { shellTool, processTool, z3VerifyTool, pariGpTool, magnitudeTool, lemmaLookupTool, barrierCheckTool } from './runtime/index.js';
+export { KNOWN_BARRIERS, matchBarriers, renderBarrierAdvisory, formatBarrier } from './runtime/index.js';
+export type { Barrier, BarrierMatch, BarrierSeverity } from './runtime/index.js';
 export { httpTool, webSearchTool, webFetchTool, downloadFileTool, createSecuredHttpTool, parseContentDisposition, filenameFromUrl, sanitizeFilename } from './network/index.js';
 export type { SecuredHttpOptions } from './network/index.js';
 export { echoTool, timeTool, jsonTool, memoryTool, jsonPatchTool, envTool, hashTool, askUserQuestionTool, renderQuestion, parseQuestionAnswer, createCredentialTools } from './utility/index.js';
@@ -82,7 +84,7 @@ export type {
 
 // ── All built-in tools ────────────────────────────────
 import { readFileTool, writeFileTool, deleteFileTool, moveFileTool, listDirTool, inspectPathTool, grepTool, globTool, patchTool } from './fs/index.js';
-import { shellTool, processTool, z3VerifyTool, pariGpTool, magnitudeTool, lemmaLookupTool } from './runtime/index.js';
+import { shellTool, processTool, z3VerifyTool, pariGpTool, magnitudeTool, lemmaLookupTool, barrierCheckTool } from './runtime/index.js';
 import { httpTool, webSearchTool, webFetchTool, downloadFileTool } from './network/index.js';
 import { echoTool, timeTool, jsonTool, memoryTool, jsonPatchTool, envTool, hashTool, askUserQuestionTool } from './utility/index.js';
 import { gitTool } from './git/index.js';
@@ -95,7 +97,7 @@ export const builtinTools: Tool[] = [
   readFileTool, writeFileTool, deleteFileTool, moveFileTool, listDirTool, inspectPathTool,
   grepTool, globTool, patchTool,
   // runtime
-  shellTool, processTool, z3VerifyTool, pariGpTool, magnitudeTool, lemmaLookupTool,
+  shellTool, processTool, z3VerifyTool, pariGpTool, magnitudeTool, lemmaLookupTool, barrierCheckTool,
   // network
   httpTool, webSearchTool, webFetchTool, downloadFileTool,
   // vision (read image + call vision model, read/network)

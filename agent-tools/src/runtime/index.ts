@@ -8,3 +8,13 @@ export { z3VerifyTool } from './z3.js';
 export { pariGpTool } from './gp.js';
 export { magnitudeTool } from './magnitude.js';
 export { lemmaLookupTool, ANALYTIC_LEMMAS } from './lemma_library.js';
+export {
+  barrierCheckTool,
+  KNOWN_BARRIERS,
+  matchBarriers,
+  renderBarrierAdvisory,
+  formatBarrier,
+  type Barrier,
+  type BarrierMatch,
+  type BarrierSeverity,
+} from './barriers.js';
