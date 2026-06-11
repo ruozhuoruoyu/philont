@@ -3821,7 +3821,7 @@ function buildFreshMessages(
         `If there is no work to log, the "## Work Log" section may just say "none". But the "## For User" section MUST have content,` +
         ` otherwise the fallback mechanism may take the last section and accidentally expose it to the user.` +
         // i18n: prompt language (English) is decoupled from reply language — the user-facing "## For User"
-        // section follows the channel/user language (WeChat → Chinese). See response_language.ts and docs/i18n/.
+        // section follows the channel/user language (WeChat → Chinese). See response_language.ts (and docs/i18n/glossary.md for terminology).
         buildLanguageDirective(resolveResponseLanguage({ channel: sessionId })) +
         timeContext +
         memoryPrefix,
