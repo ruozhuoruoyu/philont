@@ -74,6 +74,7 @@ import {
   findOrderClaim,
   type ReasoningStore,
   type ReasoningSession,
+  type ReasoningSessionMode,
   type ReasoningNode,
   type ReasoningNodeKind,
   type ReasoningSessionStatus,
@@ -566,6 +567,11 @@ export const REASON_TOOL_DEFS: ToolDefinition[] = [
         status: { type: 'string', enum: ['proved', 'refuted', 'dead_end'] },
         result: { type: 'string', description: 'Conclusion / counterexample / why it is stuck (brief)' },
         approach: { type: 'string', description: 'For dead_end: the method you tried (backtracking memory)' },
+        evidence: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Sources / observations backing the conclusion (a citation, URL, fact key, or file). REQUIRED to settle a finding in deliberate (evidence-based) mode; optional in formal proof mode.',
+        },
       },
       required: ['nodeId', 'status'],
     }),
@@ -1016,10 +1022,10 @@ export function judgeConvergence(
   return 'active';
 }
 
-function renderProgressText(s: ProgressSummary, hitCap: boolean, status: ReasoningSessionStatus): string {
+function renderProgressText(s: ProgressSummary, hitCap: boolean, status: ReasoningSessionStatus, settledVerb = 'proved'): string {
   const parts: string[] = [];
   if (s.decomposedInto > 0) parts.push(`+${s.decomposedInto} child nodes`);
-  if (s.newlyProved.length) parts.push(`proved ${s.newlyProved.length}: ${s.newlyProved.slice(0, 3).join(' / ')}`);
+  if (s.newlyProved.length) parts.push(`${settledVerb} ${s.newlyProved.length}: ${s.newlyProved.slice(0, 3).join(' / ')}`);
   if (s.newlyRefuted.length) parts.push(`refuted ${s.newlyRefuted.length}`);
   if (s.newDeadEnds.length) parts.push(`+${s.newDeadEnds.length} dead ends`);
   parts.push(`${s.stillOpen} still open`);
@@ -1093,6 +1099,263 @@ function renderFinalReport(session: ReasoningSession, nodes: ReasoningNode[]): s
   lines.push(`session id: ${session.id}`);
   return lines.join('\n');
 }
+
+// ── Reasoning profiles (domain shell): formal proof vs general evidence-based deliberation ──────────
+// The engine (tree, persistence, skeptics, stuck/Tooth-B, value selection, honesty, #1 grounding) is
+// domain-general. A ReasoningProfile owns the math-vs-general "shell": tool whitelist, round prompt,
+// skeptic prompt, the meaning of "settled", and the report. Two profiles; selected per session.mode.
+// FORMAL = the current math behaviour wrapped verbatim. DELIBERATE = general (decisions/diagnosis/
+// due-diligence): claims are settled by CITED EVIDENCE (not machine proof), retrieval IS the substrate.
+
+/** Evidence tools for DELIBERATE mode — the open web + the user's own data/memory (no z3/pari/magnitude). */
+export const DELIBERATE_RESEARCH_ALLOW: ReadonlySet<string> = new Set([
+  'webSearch',
+  'webFetch',
+  'fetchUrl',
+  'searchNotes',
+  'searchKB',
+  'getFact',
+  'listFacts',
+  'readFile',
+]);
+
+/** Same node enum, deliberation vocabulary. */
+const DELIBERATE_KIND_LABEL: Record<ReasoningNodeKind, string> = {
+  subgoal: 'sub-question',
+  lemma: 'finding',
+  construction: 'option',
+  counterexample: 'disconfirming evidence',
+  conjecture: 'hypothesis',
+};
+
+/** Round prompt for DELIBERATE mode: decompose the question, gather evidence per node, settle only when cited. */
+export function renderDeliberatePrompt(session: ReasoningSession, nodes: ReasoningNode[], lessons: string[] = []): string {
+  const lines: string[] = [];
+  lines.push('You are a careful deliberation engine working a hard, open-ended question over many rounds. You decompose it into sub-questions, gather EVIDENCE for each, and settle a sub-question ONLY when its conclusion is backed by cited sources or observations. You do not fool yourself.');
+  lines.push('');
+  lines.push('## The question');
+  lines.push(session.goal);
+  if (session.assumptions.length) {
+    lines.push('');
+    lines.push('## Given context');
+    for (const a of session.assumptions) lines.push(`- ${a}`);
+  }
+  for (const l of renderSessionBarriers(session.id)) lines.push(l);
+  for (const l of renderSessionLiterature(session.id)) lines.push(l);
+
+  const rawFrontier = computeFrontier(nodes);
+  const frontier = VALUE_GUIDED ? rankFrontier(rawFrontier, nodes, UCB_C, NOVELTY_W) : rawFrontier;
+  const settled = nodes.filter((n) => n.status === 'proved');
+  const ruledOut = nodes.filter((n) => n.status === 'refuted' || n.status === 'dead_end');
+
+  lines.push('');
+  lines.push(`## Open sub-questions to investigate (${frontier.length} total)`);
+  if (frontier.length === 0) {
+    lines.push('(none — decompose the question into sub-questions first)');
+  } else {
+    if (VALUE_GUIDED && frontier.length >= 2) {
+      lines.push(`(ranked by importance × tractability; **prefer the top one [${frontier[0].id}]** unless you have a stronger reason)`);
+    }
+    for (const n of frontier.slice(0, 20)) {
+      const ann = VALUE_GUIDED ? ` — value ${n.value === null ? '?' : n.value.toFixed(2)} / ${n.visits} rounds spent` : '';
+      lines.push(`- [${n.id}] (${DELIBERATE_KIND_LABEL[n.kind]}) ${n.claim}${ann}`);
+    }
+  }
+
+  if (settled.length) {
+    lines.push('');
+    lines.push(`## Established findings (evidence-backed, ${settled.length} total)`);
+    for (const n of settled.slice(0, 15)) {
+      const ev = n.evidenceRefs.length ? `  [sources: ${n.evidenceRefs.slice(0, 4).join('; ')}]` : '';
+      lines.push(`- [${n.id}] ${n.claim}${n.result ? ` → ${n.result}` : ''}${ev}`);
+    }
+  }
+
+  if (ruledOut.length) {
+    lines.push('');
+    lines.push(`## Ruled out / disconfirmed (${ruledOut.length} total)`);
+    for (const n of ruledOut.slice(0, 15)) {
+      const why = n.result || n.approachesTried[n.approachesTried.length - 1] || '';
+      lines.push(`- [${n.id}] ${n.claim}${why ? ` — ${why}` : ''}`);
+    }
+  }
+
+  for (const l of lessons) lines.push(l);
+  for (const l of renderRecentToolFailures(session.id)) lines.push(l);
+
+  lines.push('');
+  lines.push('## Your actions (tools)');
+  lines.push('- reason_decompose(parentNodeId, subClaims[]): split a question into concrete sub-questions (kind="subgoal") or candidate options (kind="construction"). **Primary action.**');
+  lines.push('- reason_record(nodeId, status, result, evidence[], approach?): settle a sub-question. status=proved = "established"; refuted = "ruled out by evidence"; dead_end = "cannot be resolved with available evidence". **You MUST pass `evidence` (the sources/observations you relied on) to settle a finding — a conclusion with no cited evidence is NOT accepted.**');
+  lines.push('- webSearch / webFetch / fetchUrl: gather external evidence; read the actual source, do not settle on a snippet alone.');
+  lines.push('- searchNotes / searchKB / getFact / listFacts / readFile: the USER’s own data and your memory — often the most decisive evidence (their constraints, preferences, prior facts). Check these BEFORE the open web.');
+  lines.push('');
+  lines.push('## How to deliberate (discipline)');
+  lines.push('1. **Decompose first.** Round 1 must split the question into 2–5 concrete, answerable sub-questions — do NOT browse before there is a tree.');
+  lines.push('2. Pick the most important open sub-question; gather evidence for it (the user’s own data first, then the web). **A sub-question is SETTLED only when its conclusion is backed by cited evidence — attach it via `evidence`.**');
+  lines.push('3. **Actively seek DISCONFIRMING evidence**, not just support. Record an option/hypothesis as refuted when the evidence is against it (cite the source).');
+  lines.push('4. Do not let an assertion masquerade as a finding. If you cannot find evidence, say so and leave the sub-question open — an honest "unresolved" beats a fabricated conclusion.');
+  lines.push('5. **Only use real node ids** from the tree / returned by decompose; never invent ids.');
+  lines.push('6. When evidence is genuinely unavailable → reason_record(dead_end, approach="what you tried / what evidence is missing").');
+  return lines.join('\n');
+}
+
+/** Skeptic prompt for DELIBERATE mode: an evidence reviewer (is the conclusion actually supported?). */
+export function buildDeliberateSkepticPrompt(
+  claim: string,
+  argument: string | null,
+  goal: string,
+  context: string[],
+  settledClaims: string[],
+): string {
+  const lines: string[] = [];
+  lines.push('You are a strict evidence reviewer. Someone claims the sub-question below has been SETTLED.');
+  lines.push('Your only task: decide whether the conclusion is ACTUALLY supported by the evidence given — try hard to find a hole, do not just agree.');
+  lines.push('');
+  lines.push(`## Sub-question / claim\n${claim}`);
+  lines.push('');
+  lines.push(`## The conclusion + cited evidence\n${argument && argument.trim() ? argument : '(no evidence cited — which is itself disqualifying)'}`);
+  lines.push('');
+  lines.push(`## Context: the overall question\n${goal}`);
+  if (context.length) lines.push(`\n## Given context\n${context.map((a) => `- ${a}`).join('\n')}`);
+  if (settledClaims.length) {
+    lines.push(`\n## Already established this session\n${settledClaims.slice(0, 15).map((c) => `- ${c}`).join('\n')}`);
+  }
+  lines.push('');
+  lines.push('## Review discipline');
+  lines.push('- You may use webSearch / webFetch / readFile / memory recall to CHECK whether the cited evidence actually says what is claimed, and whether a contradicting source exists.');
+  lines.push('- REFUTE if: the conclusion is not actually supported by the cited evidence; the evidence is missing, weak, or misread; a contradicting source exists; or the reasoning is motivated (cherry-picked) rather than balanced.');
+  lines.push('- **If you are unsure it is genuinely evidence-backed → verdict REFUTED** (a finding requires real support; any doubt fails).');
+  lines.push('- Only when the conclusion is clearly and fairly supported by the cited evidence → verdict HOLDS.');
+  lines.push('');
+  lines.push('## Output format');
+  lines.push('First briefly state your reasons (if refuting, name the specific gap / missing or contradicting evidence), then on a **single final line** output one of:');
+  lines.push('VERDICT: REFUTED');
+  lines.push('VERDICT: HOLDS');
+  return lines.join('\n');
+}
+
+/** Wrap-up report for DELIBERATE mode (evidence-backed findings / ruled out / open). */
+function renderDeliberateReport(session: ReasoningSession, nodes: ReasoningNode[]): string {
+  const oneLine = (s: string, max: number): string => {
+    const t = s.replace(/\s+/g, ' ').trim();
+    return t.length > max ? t.slice(0, max) + '…' : t;
+  };
+  const settled = nodes.filter((n) => n.status === 'proved');
+  const ruledOut = nodes.filter((n) => n.status === 'refuted' || n.status === 'dead_end');
+  const frontier = computeFrontier(nodes);
+  const topOpen = [...frontier]
+    .sort((a, b) => (b.value ?? 0.5) - (a.value ?? 0.5) || a.depth - b.depth)
+    .slice(0, 8);
+  const status = judgeConvergence(nodes);
+  const head = status === 'solved' ? '✓ RESOLVED' : status === 'stuck' ? '⚠ STUCK' : '◐ IN PROGRESS';
+  const lines: string[] = [];
+  lines.push(`# Deliberation report — ${head}`);
+  lines.push(`Question: ${session.goal}`);
+  lines.push(
+    `Tree: ${nodes.length} nodes — established ${settled.length} / open ${frontier.length} / ` +
+      `ruled out ${ruledOut.length}. Budget spent: ${session.budgetSpent}/${SESSION_TOKEN_BUDGET} tokens.`,
+  );
+  if (settled.length) {
+    lines.push('\n## ✓ Established (evidence-backed)');
+    for (const n of settled) {
+      const ev = n.evidenceRefs.length ? ` [sources: ${oneLine(n.evidenceRefs.slice(0, 4).join('; '), 160)}]` : '';
+      lines.push(`- ${oneLine(n.claim, 200)}${n.result ? ` — ${oneLine(n.result, 220)}` : ''}${ev}`);
+    }
+  }
+  if (ruledOut.length) {
+    lines.push('\n## ✗ Ruled out / disconfirmed');
+    for (const n of ruledOut) {
+      const why = n.result || n.approachesTried[n.approachesTried.length - 1] || '';
+      lines.push(`- ${oneLine(n.claim, 160)}${why ? ` — ${oneLine(why, 180)}` : ''}`);
+    }
+  }
+  if (topOpen.length) {
+    lines.push('\n## ◯ Still open / unresolved');
+    for (const n of topOpen) lines.push(`- ${oneLine(n.claim, 200)}${n.value != null ? ` (value ${n.value.toFixed(2)})` : ''}`);
+  }
+  lines.push(
+    status === 'solved'
+      ? '\nQuestion resolved — session complete.'
+      : '\nReply "continue" to keep gathering evidence on the open sub-questions above.',
+  );
+  lines.push(`session id: ${session.id}`);
+  return lines.join('\n');
+}
+
+/**
+ * A reasoning profile bundles everything domain-specific. The engine parameterizes over it by session.mode.
+ * settlePrecheck is a synchronous gate run before a `proved` is committed: ok=false returns the node to
+ * open with `reason` (formal: always ok — skeptics do the gating; deliberate: require cited evidence).
+ */
+export interface ReasoningProfile {
+  id: ReasoningSessionMode;
+  toolAllow: ReadonlySet<string>;
+  /** Verb used for a settled node in user/LLM messages ('proved' | 'settled'). */
+  settledVerb: string;
+  buildRoundPrompt(session: ReasoningSession, nodes: ReasoningNode[], lessons: string[]): string;
+  buildUserMessage(session: ReasoningSession, isFresh: boolean): string;
+  buildSkepticPrompt(
+    claim: string,
+    argument: string | null,
+    goal: string,
+    assumptions: string[],
+    settledClaims: string[],
+  ): string;
+  settlePrecheck(node: ReasoningNode, result: string | null, incomingEvidence: string[]): { ok: boolean; reason?: string };
+  renderReport(session: ReasoningSession, nodes: ReasoningNode[]): string;
+}
+
+export const FORMAL_PROFILE: ReasoningProfile = {
+  id: 'formal',
+  toolAllow: DEEP_EXPLORE_RESEARCH_ALLOW,
+  settledVerb: 'proved',
+  buildRoundPrompt: (session, nodes, lessons) => renderTreePrompt(session, nodes, lessons),
+  buildUserMessage: (session, isFresh) =>
+    isFresh
+      ? `${session.goal}\n\n[FRESH session — only the root node exists.] Your FIRST action MUST be ` +
+        `reason_decompose, splitting the root proposition into 2–5 concrete subgoals/lemmas. Do NOT run ` +
+        `pariGp or any computation before the root is decomposed — a round that only computes without ` +
+        `committing to the tree wastes the entire time budget and will be cut short.`
+      : 'Continue advancing the current reasoning tree; prefer the most promising open node on the frontier.',
+  buildSkepticPrompt: (claim, argument, goal, assumptions, settledClaims) =>
+    buildSkepticSystemPrompt(claim, argument, goal, assumptions, settledClaims),
+  settlePrecheck: () => ({ ok: true }),
+  renderReport: (session, nodes) => renderFinalReport(session, nodes),
+};
+
+export const DELIBERATE_PROFILE: ReasoningProfile = {
+  id: 'deliberate',
+  toolAllow: DELIBERATE_RESEARCH_ALLOW,
+  settledVerb: 'settled',
+  buildRoundPrompt: (session, nodes, lessons) => renderDeliberatePrompt(session, nodes, lessons),
+  buildUserMessage: (session, isFresh) =>
+    isFresh
+      ? `${session.goal}\n\n[FRESH session — only the root node exists.] Your FIRST action MUST be ` +
+        `reason_decompose, splitting the question into 2–5 concrete sub-questions. Do NOT gather evidence ` +
+        `before the question is decomposed — a round that only browses without committing sub-questions to ` +
+        `the tree wastes the budget and will be cut short.`
+      : 'Continue: pick the most important open sub-question, gather evidence (the user’s memory & files first, then the web) for it, and settle it ONLY when the conclusion is backed by cited evidence.',
+  buildSkepticPrompt: (claim, argument, goal, assumptions, settledClaims) =>
+    buildDeliberateSkepticPrompt(claim, argument, goal, assumptions, settledClaims),
+  settlePrecheck: (node, _result, incomingEvidence) => {
+    const have = node.evidenceRefs.length + incomingEvidence.length;
+    return have > 0
+      ? { ok: true }
+      : {
+          ok: false,
+          reason:
+            'a finding can only be settled when backed by at least one cited source or observation — ' +
+            'gather evidence and pass it via the `evidence` field, then settle again',
+        };
+  },
+  renderReport: (session, nodes) => renderDeliberateReport(session, nodes),
+};
+
+export const PROFILES: Record<ReasoningSessionMode, ReasoningProfile> = {
+  formal: FORMAL_PROFILE,
+  deliberate: DELIBERATE_PROFILE,
+};
 
 // ── Adversarial verification (adversarial self-consistency) ─────────────────────────────────────
 // Before reason_record(proved) is committed, dispatch N independent skeptic sub-LLMs to
@@ -1434,6 +1697,7 @@ export function makeReasoningToolRunner(
   delegate: (name: string, input: Record<string, unknown>) => Promise<MiniLoopToolRunResult>,
   verifyProved?: (node: ReasoningNode, argument: string | null) => Promise<VerificationTally | null>,
   actions?: ActionLog,
+  profile: ReasoningProfile = FORMAL_PROFILE,
 ): (name: string, input: Record<string, unknown>) => Promise<MiniLoopToolRunResult> {
   return async (name, input) => {
     if (name === 'reason_decompose') {
@@ -1478,19 +1742,23 @@ export function makeReasoningToolRunner(
       const status = input.status as string;
       let result = typeof input.result === 'string' ? input.result : null;
       const approach = typeof input.approach === 'string' ? input.approach : undefined;
+      const evidence = Array.isArray(input.evidence)
+        ? input.evidence.filter((e): e is string => typeof e === 'string' && e.trim().length > 0).map((e) => e.trim())
+        : [];
       if (!RECORD_STATUSES.has(status)) {
         return { ok: false, output: '', error: `status must be proved/refuted/dead_end, got ${String(status)}` };
       }
+      const writeEvidence = (nid: string) => {
+        for (const e of evidence) reasoning.updateNode(sessionId, nid, { addEvidence: e });
+      };
 
-      // Estimate-honesty gate (advisory): a node recorded "proved" on an asymptotic/quantitative ESTIMATE
-      // claim, in a session that has never run a verification tool, is annotated as unverified so it can't
-      // pass downstream as a checked lemma. Fail-open — never blocks; just attaches the caveat once.
-      if (status === 'proved' && result && !sessionVerifierUsed.has(sessionId) && findOrderClaim(result)) {
+      // Estimate-honesty gate (FORMAL only, advisory): a node recorded "proved" on an asymptotic/quantitative
+      // ESTIMATE in a session that never ran a verification tool is annotated as unverified. Fail-open.
+      if (profile.id === 'formal' && status === 'proved' && result && !sessionVerifierUsed.has(sessionId) && findOrderClaim(result)) {
         result += ESTIMATE_CAVEAT;
       }
 
-      // proved + adversarial verification enabled → run refutation review before committing to DB.
-      if (status === 'proved' && verifyProved) {
+      if (status === 'proved') {
         const target = reasoning.getNode(sessionId, nodeId);
         if (!target) {
           const nodes = reasoning.getNodes(sessionId);
@@ -1500,29 +1768,47 @@ export function makeReasoningToolRunner(
             error: `Node ${nodeId} does not exist in this session. Current open nodes: [${formatOpenIds(nodes)}]; retry with a real id.`,
           };
         }
-        const tally = await verifyProved(target, result);
-        if (tally && !tally.confirmed) {
-          const objection = tally.topObjection ? `: ${tally.topObjection}` : '';
-          // Do not accept proved: keep the node as-is (open) and write the strongest objection into
-          // backtracking memory (appendApproach is decoupled from status).
-          reasoning.updateNode(sessionId, nodeId, {
-            appendApproach: `proof refuted by ${tally.refutedCount}/${tally.validVotes} reviewers${objection}`,
-          });
+        // Profile settle-precheck (deliberate: require cited evidence). On reject keep any gathered evidence,
+        // leave the node open, and tell the model what is missing.
+        const pre = profile.settlePrecheck(target, result, evidence);
+        if (!pre.ok) {
+          writeEvidence(nodeId);
+          reasoning.updateNode(sessionId, nodeId, { appendApproach: `not ${profile.settledVerb}: ${pre.reason ?? 'precheck failed'}` });
           return {
             ok: true,
-            output:
-              `Node [${nodeId}]'s "proved" did not pass adversarial verification (${tally.refutedCount}/${tally.validVotes} reviewers refuted it); not recorded, node stays open. ` +
-              `The objection has been saved to backtracking memory. Fix the flaw and re-prove, or take another frontier path.` +
-              (tally.topObjection ? `\nMain objection: ${tally.topObjection}` : ''),
+            output: `Node [${nodeId}] not ${profile.settledVerb}: ${pre.reason ?? 'precheck failed'} Node stays open — address that and settle again.`,
           };
         }
-        // Passed (or all abstained): record proved as usual, with a verification mark.
+        // Adversarial review (skeptics), when enabled.
+        if (verifyProved) {
+          const tally = await verifyProved(target, result);
+          if (tally && !tally.confirmed) {
+            const objection = tally.topObjection ? `: ${tally.topObjection}` : '';
+            writeEvidence(nodeId); // keep the evidence the model gathered, even though it didn't pass
+            reasoning.updateNode(sessionId, nodeId, {
+              appendApproach: `refuted by ${tally.refutedCount}/${tally.validVotes} reviewers${objection}`,
+            });
+            return {
+              ok: true,
+              output:
+                `Node [${nodeId}] did not pass adversarial verification (${tally.refutedCount}/${tally.validVotes} reviewers refuted it); not recorded, node stays open. ` +
+                `The objection has been saved to backtracking memory. Strengthen it and settle again, or take another path.` +
+                (tally.topObjection ? `\nMain objection: ${tally.topObjection}` : ''),
+            };
+          }
+          reasoning.updateNode(sessionId, nodeId, { status: 'proved', result });
+          writeEvidence(nodeId);
+          const vmark =
+            tally && tally.validVotes > 0 ? ` (passed adversarial verification by ${tally.validVotes} reviewers)` : '';
+          return { ok: true, output: `Recorded [${nodeId}] = ${profile.settledVerb}${result ? `: ${result}` : ''}${vmark}` };
+        }
+        // No skeptics: commit directly.
         reasoning.updateNode(sessionId, nodeId, { status: 'proved', result });
-        const vmark =
-          tally && tally.validVotes > 0 ? ` (passed adversarial verification by ${tally.validVotes} reviewers)` : '';
-        return { ok: true, output: `Recorded [${nodeId}] = proved${result ? `: ${result}` : ''}${vmark}` };
+        writeEvidence(nodeId);
+        return { ok: true, output: `Recorded [${nodeId}] = ${profile.settledVerb}${result ? `: ${result}` : ''}` };
       }
 
+      // refuted / dead_end
       const updated = reasoning.updateNode(sessionId, nodeId, {
         status: status as ReasoningNode['status'],
         result,
@@ -1537,6 +1823,7 @@ export function makeReasoningToolRunner(
           error: `Node ${nodeId} does not exist in this session. Current open nodes: [${formatOpenIds(nodes)}]; retry with a real id.`,
         };
       }
+      writeEvidence(nodeId);
       return { ok: true, output: `Recorded [${nodeId}] = ${status}${result ? `: ${result}` : ''}` };
     }
 
@@ -1600,37 +1887,43 @@ export function createDeepExploreTool(
 ): { tool: Tool; advanceSession: (session: ReasoningSession) => Promise<ToolResult> } {
   const { reasoning, miniLoopLLM, subTurnToolRunner, readOnlyToolDefs, actions, skills } = deps;
   const maxIters = deps.maxIters ?? DEFAULT_MAX_ITERS;
-  // Tighten: deep_explore is a **reasoning** loop, not a browsing loop. Research tools are
-  // restricted to local-only "recall your own earlier conclusions / computations" lookups;
-  // **web browsing (webSearch/webFetch/fetchUrl) and directory browsing (listDir/inspectPath)
-  // are excluded** — in practice sub-LLMs use them to avoid real reasoning.
-  const researchDefs = readOnlyToolDefs.filter((d) => DEEP_EXPLORE_RESEARCH_ALLOW.has(d.name));
-  const toolDefs: ToolDefinition[] = [...REASON_TOOL_DEFS, ...researchDefs];
-  // Independent whitelist: reason_* must be explicitly included, otherwise the mini-loop's
-  // gateToolCall intercepts them.
-  const whitelist: ReadonlySet<string> = new Set([
-    ...REASON_TOOL_NAMES,
-    ...researchDefs.map((d) => d.name),
-  ]);
+  // Per-profile runtimes: the tool whitelist depends on the session's mode (FORMAL = math verify tools, no
+  // web; DELIBERATE = web + the user's own data, evidence as substrate). Precompute both from the fixed
+  // readOnlyToolDefs (which already includes web tools) and pick per round by session.mode.
+  // reason_* must be explicitly whitelisted or the mini-loop's gateToolCall intercepts them.
+  function buildProfileRuntime(profile: ReasoningProfile): {
+    researchDefs: ToolDefinition[];
+    toolDefs: ToolDefinition[];
+    whitelist: ReadonlySet<string>;
+  } {
+    const researchDefs = readOnlyToolDefs.filter((d) => profile.toolAllow.has(d.name));
+    return {
+      researchDefs,
+      toolDefs: [...REASON_TOOL_DEFS, ...researchDefs],
+      whitelist: new Set([...REASON_TOOL_NAMES, ...researchDefs.map((d) => d.name)]),
+    };
+  }
+  const PROFILE_RT: Record<ReasoningSessionMode, ReturnType<typeof buildProfileRuntime>> = {
+    formal: buildProfileRuntime(FORMAL_PROFILE),
+    deliberate: buildProfileRuntime(DELIBERATE_PROFILE),
+  };
 
-  // Adversarial verification hook factory: before reason_record(proved) is committed, dispatch
-  // skeptic sub-LLMs (read-only researchDefs, do not touch the tree) to attempt refutation.
-  // Verification tokens are counted against the session budget. SKEPTIC_COUNT=0 disables this,
-  // reverting to old behaviour. Shared by both prove and explore round types.
-  function buildVerifyProved(session: ReasoningSession, abortSignal: AbortSignal) {
+  // Adversarial verification hook factory: before a node is settled, dispatch skeptic sub-LLMs (read-only,
+  // do not touch the tree) to attempt refutation, using the PROFILE's skeptic prompt + tool set (formal:
+  // "find the proof gap" + z3/recall; deliberate: "is it evidence-backed?" + web/recall). Tokens count
+  // against the session budget. SKEPTIC_COUNT=0 disables, reverting to old behaviour.
+  function buildVerifyProved(session: ReasoningSession, abortSignal: AbortSignal, profile: ReasoningProfile) {
     if (SKEPTIC_COUNT <= 0) return undefined;
     return async (node: ReasoningNode, argument: string | null): Promise<VerificationTally> => {
       const all = reasoning.getNodes(session.id);
       const provedClaims = all
         .filter((n) => n.status === 'proved' && n.id !== node.id)
         .map((n) => n.claim);
-      const sys = buildSkepticSystemPrompt(node.claim, argument, session.goal, session.assumptions, provedClaims);
-      // 2026-06-08: skeptics get z3Verify + recall but NOT pariGp. Skeptics are reviewers, not
-      // explorers; pariGp is the main round's discovery/compute tool. In practice skeptics burned
-      // their whole 6-iter budget retrying malformed PARI/GP scripts (a failed tool call counts as
-      // a full iteration) instead of refuting — leaving no iters for actual verification. z3Verify
-      // covers rigorous decidable/arithmetic refutation; conceptual review covers the rest.
-      const skepticToolDefs = researchDefs.filter((d) => d.name !== 'pariGp');
+      const sys = profile.buildSkepticPrompt(node.claim, argument, session.goal, session.assumptions, provedClaims);
+      // Skeptics get the profile's research tools minus pariGp (formal: z3+recall; deliberate: web+recall).
+      // 2026-06-08: pariGp is excluded — skeptics burned their whole budget retrying malformed PARI/GP
+      // scripts instead of reviewing; z3 covers rigorous formal refutation, web covers evidence checks.
+      const skepticToolDefs = PROFILE_RT[profile.id].researchDefs.filter((d) => d.name !== 'pariGp');
       const tally = await runAdversarialVerification({
         llm: miniLoopLLM,
         systemPrompt: sys,
@@ -1694,8 +1987,11 @@ export function createDeepExploreTool(
         output: `This reasoning session has used ${session.budgetSpent} tokens, hitting the budget cap (${SESSION_TOKEN_BUDGET}); paused. Continue later with a fresh angle, or treat it as stuck.`,
       };
     }
-    // Feasibility gate: populate (or re-derive after a restart) this session's known barriers so
-    // renderTreePrompt can inject them. Cheap, pure, cached per session.
+    // Resolve the reasoning profile (formal proof vs general evidence-based deliberation) from the session.
+    const profile = PROFILES[session.mode] ?? FORMAL_PROFILE;
+    const rt = PROFILE_RT[profile.id];
+    // Feasibility gate: populate (or re-derive after a restart) this session's known barriers so the
+    // round prompt can inject them. Cheap, pure, cached per session.
     ensureBarriers(session);
 
     // Wall-clock budget for the WHOLE round (scoring + mini-loop). The timer starts HERE, before the
@@ -1738,15 +2034,9 @@ export function createDeepExploreTool(
     // record the starting frontier ids for UCB visit accounting.
     const before = reasoning.getNodes(session.id);
     const frontierStartIds = new Set(computeFrontier(before).map((n) => n.id));
-    const systemPrompt = renderTreePrompt(session, before, collectComputeLessons(skills));
+    const systemPrompt = profile.buildRoundPrompt(session, before, collectComputeLessons(skills));
     const userMessage =
-      (before.length <= 1
-        ? `${session.goal}\n\n[FRESH session — only the root node exists.] Your FIRST action MUST be ` +
-          `reason_decompose, splitting the root proposition into 2–5 concrete subgoals/lemmas. Do NOT run ` +
-          `pariGp or any computation before the root is decomposed — a round that only computes without ` +
-          `committing to the tree wastes the entire time budget and will be cut short.`
-        : 'Continue advancing the current reasoning tree; prefer the most promising open node on the frontier.') +
-      buildStuckDirective(session.noProgressRounds ?? 0);
+      profile.buildUserMessage(session, before.length <= 1) + buildStuckDirective(session.noProgressRounds ?? 0);
 
     // Proactive heads-up partway through the round so a long round does not end "silently":
     // tell the user it is approaching the per-round time cap and will wrap up & save soon.
@@ -1763,8 +2053,9 @@ export function createDeepExploreTool(
         reasoning,
         session.id,
         subTurnToolRunner,
-        buildVerifyProved(session, ctrl.signal),
+        buildVerifyProved(session, ctrl.signal, profile),
         actions,
+        profile,
       ),
       () => ctrl.abort(),
       // Stop a round that has made NO tree commit for half the round budget (the slow all-pariGp spin).
@@ -1776,10 +2067,10 @@ export function createDeepExploreTool(
         systemPrompt,
         userMessage,
         llm: miniLoopLLM,
-        toolDefs,
+        toolDefs: rt.toolDefs,
         toolRunner: boundRunner,
         maxIters,
-        toolWhitelist: whitelist,
+        toolWhitelist: rt.whitelist,
         onStatus: deps.onStatus,
         abortSignal: ctrl.signal,
         // 2026-06-07: proof-search round is a complex multi-step agent → max reasoning effort (tunable via PHILONT_DEEP_EXPLORE_EFFORT).
@@ -1819,7 +2110,7 @@ export function createDeepExploreTool(
     const status = judgeConvergence(after);
     if (status !== 'active') reasoning.setSessionStatus(session.id, status);
 
-    const text = renderProgressText(summary, result.hitCap, status);
+    const text = renderProgressText(summary, result.hitCap, status, profile.settledVerb);
     deps.onMilestone?.(text);
     const tail =
       result.error === 'aborted'
@@ -1856,6 +2147,9 @@ export function createDeepExploreTool(
         output: `This session has used ${session.budgetSpent} tokens, hitting the budget cap (${SESSION_TOKEN_BUDGET}); paused.`,
       };
     }
+    // Discover (experimental-math) is FORMAL-only for now — it is pariGp-driven conjecture generation.
+    const profile = FORMAL_PROFILE;
+    const rt = PROFILE_RT.formal;
     const before = reasoning.getNodes(session.id);
     const beforeConjectures = before.filter((n) => n.kind === 'conjecture').length;
     const systemPrompt = buildDiscoverPrompt(session, before, seed, collectComputeLessons(skills));
@@ -1878,8 +2172,9 @@ export function createDeepExploreTool(
         reasoning,
         session.id,
         subTurnToolRunner,
-        buildVerifyProved(session, ctrl.signal),
+        buildVerifyProved(session, ctrl.signal, profile),
         actions,
+        profile,
       ),
       () => ctrl.abort(),
       // Stop a round that has made NO tree commit for half the round budget (the slow all-pariGp spin).
@@ -1891,10 +2186,10 @@ export function createDeepExploreTool(
         systemPrompt,
         userMessage,
         llm: miniLoopLLM,
-        toolDefs,
+        toolDefs: rt.toolDefs,
         toolRunner: boundRunner,
         maxIters,
-        toolWhitelist: whitelist,
+        toolWhitelist: rt.whitelist,
         onStatus: deps.onStatus,
         abortSignal: ctrl.signal,
         // 2026-06-07: discovery round is a complex multi-step search agent → max reasoning effort (tunable via PHILONT_DEEP_EXPLORE_EFFORT).
@@ -1942,9 +2237,16 @@ export function createDeepExploreTool(
   const tool: Tool = {
     name: 'deep_explore',
     description:
-      'Deep-reasoning engine: persistent reasoning over a hard problem/conjecture via "decompose a subproblem tree → advance over many steps → prove/counterexample/backtrack", ' +
-      'with state accumulating across turns (you can resume days later). Only call it when the user clearly wants to "deeply attack a hard problem/conjecture/proof"; not for ordinary Q&A.\n' +
-      'action="start": open a new reasoning session (goal = the root proposition to attack, assumptions optional) and advance one round.\n' +
+      'Deep-reasoning engine: persistent reasoning over a HARD, open-ended problem via "decompose into a ' +
+      'tree → advance over many steps → settle / counter / backtrack", with state accumulating across turns ' +
+      '(you can resume days later). Two modes:\n' +
+      '• mode="formal" (default): a mathematical / formal PROOF — claims settled by machine-check + skeptic ' +
+      '(z3/PARI-GP/asymptotics). Use for conjectures, theorems, proofs.\n' +
+      '• mode="deliberate": a general open-ended JUDGMENT — decisions ("should I take this offer / pivot to ' +
+      'B2B"), root-cause diagnosis ("why is retention dropping"), due diligence, untangling a multi-party ' +
+      'situation. Claims are settled by CITED EVIDENCE (the user\'s own data + the web), not proof.\n' +
+      'Call it when the user wants to think something hard through deeply over time — NOT for ordinary Q&A.\n' +
+      'action="start": open a new reasoning session (goal = the proposition/question; pick mode; assumptions/context optional) and advance one round.\n' +
       'action="continue": keep advancing the most recent in-progress session (no id needed).\n' +
       'action="discover": **experimental-math mode** — use pariGp to compute data and find patterns, propose evidence-backed new conjectures and prune them by counterexample search, ' +
       'hanging survivors on the tree to prove later. Good when you don\'t yet know what to prove and want to discover patterns/conjectures first. Takes an optional seed (topic) or goal (creates a session if none is active).\n' +
@@ -1956,7 +2258,8 @@ export function createDeepExploreTool(
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['start', 'continue', 'discover', 'status', 'finalize', 'auto_on', 'auto_off'] },
-        goal: { type: 'string', description: 'action=start: the root proposition to attack; action=explore with no active session: the exploration domain as the root' },
+        mode: { type: 'string', enum: ['formal', 'deliberate'], description: 'action=start: "formal" (default, math/proof) or "deliberate" (general evidence-based judgment — decisions/diagnosis/due-diligence).' },
+        goal: { type: 'string', description: 'action=start: the proposition to prove (formal) or the question to think through (deliberate)' },
         seed: { type: 'string', description: 'action=explore optional: the topic/object to focus this round on (e.g. a family of polynomials, a sequence)' },
         assumptions: {
           type: 'array',
@@ -1980,7 +2283,8 @@ export function createDeepExploreTool(
         const assumptions = Array.isArray(params.assumptions)
           ? params.assumptions.filter((a): a is string => typeof a === 'string' && a.trim().length > 0)
           : [];
-        const { session } = reasoning.createSession({ goal, assumptions, ownerSessionId: owner });
+        const mode: ReasoningSessionMode = params.mode === 'deliberate' ? 'deliberate' : 'formal';
+        const { session } = reasoning.createSession({ goal, assumptions, ownerSessionId: owner, mode });
         // Literature grounding: one-shot web pass surveying what is already known (cited cards), injected
         // into every round prompt + merged into the start milestone below. Runs before the first round.
         const litCards = await groundFromLiterature(session);
@@ -2055,7 +2359,7 @@ export function createDeepExploreTool(
       if (action === 'finalize') {
         const session = reasoning.getMostRecentActiveSession(owner);
         if (!session) return { success: true, output: 'No deep-explore session to finalize.' };
-        const report = renderFinalReport(session, reasoning.getNodes(session.id));
+        const report = (PROFILES[session.mode] ?? FORMAL_PROFILE).renderReport(session, reasoning.getNodes(session.id));
         deps.onMilestone?.(report); // persist as a chat bubble so the conclusion is not lost
         return { success: true, output: report };
       }

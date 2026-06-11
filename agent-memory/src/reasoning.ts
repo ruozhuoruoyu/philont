@@ -17,6 +17,14 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 
 export type ReasoningSessionStatus = 'active' | 'solved' | 'stuck' | 'abandoned';
+/**
+ * Reasoning mode = which domain "profile" the deep_explore engine runs:
+ *   - 'formal'     : mathematical / formal proof — claims settled by machine-check + skeptic (z3/pari/…)
+ *   - 'deliberate' : general open-ended judgment (decisions, diagnosis, due-diligence) — claims settled
+ *                    by cited evidence + adversarial review. Verification substrate is evidence, not proof.
+ * Persisted on the session so continue/status/finalize pick the same profile across turns. Default 'formal'.
+ */
+export type ReasoningSessionMode = 'formal' | 'deliberate';
 export type ReasoningNodeKind = 'subgoal' | 'lemma' | 'construction' | 'counterexample' | 'conjecture';
 export type ReasoningNodeStatus = 'open' | 'proved' | 'refuted' | 'dead_end' | 'blocked';
 
@@ -34,6 +42,8 @@ export interface ReasoningSession {
   noProgressRounds: number;
   /** Per-session opt-in: when true, the background loop auto-advances this session round-by-round. */
   autoAdvance: boolean;
+  /** Which reasoning profile this session runs (formal proof vs general evidence-based deliberation). Default 'formal'. */
+  mode: ReasoningSessionMode;
   createdAt: number;
   updatedAt: number;
 }
@@ -70,6 +80,7 @@ interface SessionRow {
   budget_spent: number;
   no_progress_rounds: number;
   auto_advance: number;
+  mode: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -103,6 +114,7 @@ function rowToSession(r: SessionRow): ReasoningSession {
     budgetSpent: r.budget_spent,
     noProgressRounds: r.no_progress_rounds ?? 0,
     autoAdvance: !!r.auto_advance,
+    mode: (r.mode === 'deliberate' ? 'deliberate' : 'formal') as ReasoningSessionMode,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -141,8 +153,13 @@ export class ReasoningNodeNotFoundError extends Error {
 export class ReasoningStore {
   constructor(private readonly db: Database.Database) {}
 
-  /** Create a session + root node (claim=goal). Returns both. */
-  createSession(input: { goal: string; assumptions?: string[]; ownerSessionId?: string | null }): {
+  /** Create a session + root node (claim=goal). Returns both. mode defaults to 'formal' (math proof). */
+  createSession(input: {
+    goal: string;
+    assumptions?: string[];
+    ownerSessionId?: string | null;
+    mode?: ReasoningSessionMode;
+  }): {
     session: ReasoningSession;
     rootNode: ReasoningNode;
   } {
@@ -151,10 +168,10 @@ export class ReasoningStore {
     const rootId = randomUUID();
 
     this.db
-      .prepare<[string, string, string, string | null, string, number, number]>(
+      .prepare<[string, string, string, string | null, string, string, number, number]>(
         `INSERT INTO reasoning_sessions
-          (id, goal, assumptions_json, status, owner_session_id, root_node_id, budget_spent, created_at, updated_at)
-         VALUES (?, ?, ?, 'active', ?, ?, 0, ?, ?)`,
+          (id, goal, assumptions_json, status, owner_session_id, root_node_id, budget_spent, mode, created_at, updated_at)
+         VALUES (?, ?, ?, 'active', ?, ?, 0, ?, ?, ?)`,
       )
       .run(
         sessionId,
@@ -162,6 +179,7 @@ export class ReasoningStore {
         JSON.stringify(input.assumptions ?? []),
         input.ownerSessionId ?? null,
         rootId,
+        input.mode === 'deliberate' ? 'deliberate' : 'formal',
         now,
         now,
       );

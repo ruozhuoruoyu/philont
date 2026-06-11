@@ -16,7 +16,7 @@
 import type Database from 'better-sqlite3';
 import { DEFAULT_CONSTITUTION_VALUES, DEFAULT_CONSTITUTION_RED_LINES } from './constitution_defaults.js';
 
-export const SCHEMA_VERSION = 30;
+export const SCHEMA_VERSION = 31;
 
 /**
  * Canonical id for the bootstrap root pursuit. Used consistently by v7 migration and empty-DB init
@@ -974,6 +974,7 @@ function migrateV24ToV25(db: Database.Database): void {
       budget_spent      INTEGER NOT NULL DEFAULT 0,
       no_progress_rounds INTEGER NOT NULL DEFAULT 0,
       auto_advance      INTEGER NOT NULL DEFAULT 0,
+      mode              TEXT NOT NULL DEFAULT 'formal',
       created_at        INTEGER NOT NULL,
       updated_at        INTEGER NOT NULL
     );
@@ -1071,6 +1072,20 @@ function migrateV29ToV30(db: Database.Database): void {
   const have = new Set(cols.map((c) => c.name));
   if (!have.has('auto_advance')) {
     db.exec(`ALTER TABLE reasoning_sessions ADD COLUMN auto_advance INTEGER NOT NULL DEFAULT 0`);
+  }
+}
+
+/**
+ * v30→v31: add reasoning_sessions.mode — which deep_explore profile the session runs
+ * ('formal' = math proof, default; 'deliberate' = general evidence-based judgment). Existing rows default
+ * to 'formal' so the math behavior is unchanged. ADD COLUMN only; skip if the table does not exist.
+ */
+function migrateV30ToV31(db: Database.Database): void {
+  if (!tableExists(db, 'reasoning_sessions')) return;
+  const cols = db.prepare(`PRAGMA table_info(reasoning_sessions)`).all() as Array<{ name: string }>;
+  const have = new Set(cols.map((c) => c.name));
+  if (!have.has('mode')) {
+    db.exec(`ALTER TABLE reasoning_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'formal'`);
   }
 }
 
@@ -1309,6 +1324,9 @@ export function initSchema(db: Database.Database): void {
   }
   if (current < 30) {
     migrateV29ToV30(db);
+  }
+  if (current < 31) {
+    migrateV30ToV31(db);
   }
 
   // 3) Finally run partial indexes that depend on v3 new columns

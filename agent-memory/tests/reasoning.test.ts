@@ -20,6 +20,17 @@ test('createSession 建会话 + 根节点(claim=goal),listActiveSessions 命中'
   assert.equal(rootNode.status, 'open');
   assert.equal(mem.reasoning.listActiveSessions().length, 1);
   assert.equal(mem.reasoning.getMostRecentActiveSession()!.id, session.id);
+  assert.equal(session.mode, 'formal', 'mode 默认 formal');
+  mem.close();
+});
+
+test('createSession mode=deliberate 持久化并在 getSession 回放', () => {
+  const mem = openMemoryDb(':memory:');
+  const { session } = mem.reasoning.createSession({ goal: '该不该接 offer', mode: 'deliberate' });
+  assert.equal(session.mode, 'deliberate');
+  // 跨"读取"仍是 deliberate(continue/status/finalize 走 getSession/getMostRecentActiveSession)
+  assert.equal(mem.reasoning.getSession(session.id)!.mode, 'deliberate');
+  assert.equal(mem.reasoning.getMostRecentActiveSession()!.mode, 'deliberate');
   mem.close();
 });
 

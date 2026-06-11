@@ -94,6 +94,7 @@ export { PushSubscriptionStore } from './push_subscriptions.js';
 export { ReasoningStore, ReasoningNodeNotFoundError } from './reasoning.js';
 export type {
   ReasoningSession,
+  ReasoningSessionMode,
   ReasoningNode,
   ReasoningSessionStatus,
   ReasoningNodeKind,

@@ -38,6 +38,12 @@ import {
   renderLiteratureCards,
   buildLiteratureGroundingPrompt,
   type LiteratureCard,
+  FORMAL_PROFILE,
+  DELIBERATE_PROFILE,
+  PROFILES,
+  DELIBERATE_RESEARCH_ALLOW,
+  renderDeliberatePrompt,
+  buildDeliberateSkepticPrompt,
 } from '../src/deep_explore.js';
 
 function node(over: Partial<ReasoningNode>): ReasoningNode {
@@ -821,4 +827,60 @@ test('buildLiteratureGroundingPrompt: includes goal, retrieval targets, and stri
   assert.match(p, /KNOWN OBSTRUCTIONS|barrier/i);
   assert.match(p, /ONLY a JSON array/);
   assert.match(p, /NOT to solve the problem/);
+});
+
+// ── Dual-mode: DELIBERATE_PROFILE (general evidence-based deliberation) ────────────────────────────
+
+test('PROFILES: formal vs deliberate are wired with the right ids/verbs', () => {
+  assert.equal(PROFILES.formal.id, 'formal');
+  assert.equal(PROFILES.deliberate.id, 'deliberate');
+  assert.equal(FORMAL_PROFILE.settledVerb, 'proved');
+  assert.equal(DELIBERATE_PROFILE.settledVerb, 'settled');
+});
+
+test('toolAllow: deliberate allows web + user data, formal excludes web', () => {
+  for (const t of ['webSearch', 'webFetch', 'readFile', 'getFact']) {
+    assert.ok(DELIBERATE_PROFILE.toolAllow.has(t), `deliberate should allow ${t}`);
+    assert.ok(DELIBERATE_RESEARCH_ALLOW.has(t));
+  }
+  // formal keeps the math verify tools and NO web
+  assert.ok(FORMAL_PROFILE.toolAllow.has('z3Verify'));
+  assert.ok(!FORMAL_PROFILE.toolAllow.has('webSearch'), 'formal must not allow web in the loop');
+  assert.ok(!DELIBERATE_PROFILE.toolAllow.has('pariGp'), 'deliberate has no formal compute tools');
+});
+
+test('settlePrecheck: deliberate requires evidence to settle; formal never blocks', () => {
+  const noEv = node({ id: 'x', status: 'open', evidenceRefs: [] });
+  // deliberate: empty node evidence + empty incoming → blocked
+  const blocked = DELIBERATE_PROFILE.settlePrecheck(noEv, 'because', []);
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason ?? '', /evidence/i);
+  // deliberate: incoming evidence this call → ok
+  assert.equal(DELIBERATE_PROFILE.settlePrecheck(noEv, 'because', ['https://src']).ok, true);
+  // deliberate: node already has evidence → ok
+  assert.equal(DELIBERATE_PROFILE.settlePrecheck(node({ evidenceRefs: ['prior'] }), 'x', []).ok, true);
+  // formal: always ok regardless of evidence
+  assert.equal(FORMAL_PROFILE.settlePrecheck(noEv, 'QED', []).ok, true);
+});
+
+test('renderDeliberatePrompt: question vocabulary + evidence discipline, no math primers', () => {
+  const session = { id: 's', goal: '该不该接这个 offer', assumptions: [], status: 'active' as const, rootNodeId: 'r', budgetSpent: 0, noProgressRounds: 0, autoAdvance: false, mode: 'deliberate' as const, createdAt: 0, updatedAt: 0 };
+  const nodes = [
+    node({ id: 'r', parentId: null, status: 'open', claim: '该不该接这个 offer' }),
+    node({ id: 'q1', parentId: 'r', status: 'open', kind: 'subgoal', claim: '现金流能撑多久' }),
+    node({ id: 'f1', parentId: 'r', status: 'proved', kind: 'lemma', claim: '团队靠谱', result: '面了 3 人', evidenceRefs: ['note:abc'] }),
+  ];
+  const p = renderDeliberatePrompt(session, nodes);
+  assert.match(p, /sub-question/);     // deliberate kind label
+  assert.match(p, /evidence/i);
+  assert.match(p, /Established findings/);
+  assert.match(p, /该不该接这个 offer/);
+  assert.ok(!/pariGp|magnitude|lemma\b|z3Verify/.test(p), 'deliberate prompt must not carry math tooling');
+});
+
+test('buildDeliberateSkepticPrompt: an evidence reviewer, not a proof-gap reviewer', () => {
+  const s = buildDeliberateSkepticPrompt('现金流能撑 12 个月', '银行流水显示…', '该不该接 offer', [], []);
+  assert.match(s, /evidence reviewer/i);
+  assert.match(s, /actually supported by the cited evidence/i);
+  assert.match(s, /VERDICT: REFUTED/); // reuses the shared verdict parser format
 });
