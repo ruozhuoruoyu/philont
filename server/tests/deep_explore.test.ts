@@ -34,6 +34,10 @@ import {
   buildDiscoverPrompt,
   createDeepExploreTool,
   roundWasSubstantive,
+  parseLiteratureCards,
+  renderLiteratureCards,
+  buildLiteratureGroundingPrompt,
+  type LiteratureCard,
 } from '../src/deep_explore.js';
 
 function node(over: Partial<ReasoningNode>): ReasoningNode {
@@ -761,4 +765,60 @@ test('roundWasSubstantive: a round with no settle and no decompose is not substa
   const before = [node({ id: 'x', depth: 2, value: 0.9, status: 'open' })];
   const after = [node({ id: 'x', depth: 2, value: 0.9, status: 'open' })]; // unchanged
   assert.equal(roundWasSubstantive(before, after, 0.35), false);
+});
+
+// ── #1: literature grounding (parse cited cards / render / prompt) ─────────────────────────────────
+
+test('parseLiteratureCards: valid JSON array → typed cards, unknown type → background', () => {
+  const text = `Here are the cards:
+  [
+    {"claim":"Chen: every large even N = p + P2","type":"sota","source":"Chen 1973"},
+    {"claim":"parity problem blocks sieves for binary Goldbach","type":"barrier","source":"Selberg"},
+    {"claim":"something vague","type":"weird-type","source":""}
+  ]`;
+  const cards = parseLiteratureCards(text);
+  assert.equal(cards.length, 3);
+  assert.equal(cards[0].type, 'sota');
+  assert.equal(cards[1].type, 'barrier');
+  assert.equal(cards[2].type, 'background'); // unknown normalized
+  assert.equal(cards[0].source, 'Chen 1973');
+});
+
+test('parseLiteratureCards: tolerant — strips prose, skips item without claim, respects max', () => {
+  const text = 'prose [{"claim":"","type":"sota"},{"claim":"keep me","type":"open"},{"claim":"and me","type":"approach"}] trailing';
+  const cards = parseLiteratureCards(text, 1);
+  assert.equal(cards.length, 1); // empty-claim skipped, capped at 1
+  assert.equal(cards[0].claim, 'keep me');
+});
+
+test('parseLiteratureCards: non-JSON / no array → empty (graceful)', () => {
+  assert.deepEqual(parseLiteratureCards(''), []);
+  assert.deepEqual(parseLiteratureCards('no json here at all'), []);
+  assert.deepEqual(parseLiteratureCards('[not, valid, json'), []);
+});
+
+test('renderLiteratureCards: empty → [], else header + barriers/SOTA sorted first', () => {
+  assert.deepEqual(renderLiteratureCards([]), []);
+  const cards: LiteratureCard[] = [
+    { claim: 'open frontier thing', type: 'open', source: 's1' },
+    { claim: 'the barrier', type: 'barrier', source: 's2' },
+    { claim: 'best known', type: 'sota', source: 's3' },
+  ];
+  const lines = renderLiteratureCards(cards);
+  assert.match(lines[0], /Known from the literature/);
+  // barrier should sort ahead of sota ahead of open
+  const body = lines.slice(1).join('\n');
+  assert.ok(body.indexOf('the barrier') < body.indexOf('best known'));
+  assert.ok(body.indexOf('best known') < body.indexOf('open frontier thing'));
+  assert.match(body, /\(s2\)/); // source rendered
+});
+
+test('buildLiteratureGroundingPrompt: includes goal, retrieval targets, and strict JSON-only output', () => {
+  const p = buildLiteratureGroundingPrompt('Prove X via method Y', ['assume Z']);
+  assert.match(p, /Prove X via method Y/);
+  assert.match(p, /assume Z/);
+  assert.match(p, /webSearch \/ webFetch/);
+  assert.match(p, /KNOWN OBSTRUCTIONS|barrier/i);
+  assert.match(p, /ONLY a JSON array/);
+  assert.match(p, /NOT to solve the problem/);
 });

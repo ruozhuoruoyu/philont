@@ -308,6 +308,117 @@ function renderSessionBarriers(sessionId: string): string[] {
 }
 
 /**
+ * Literature grounding (the deep-research half, wired in). deep_explore deliberately keeps web tools OUT
+ * of the per-round reasoning loop (browsing-instead-of-reasoning failure mode). But the agent already HAS
+ * web search (research_focus / the main agent) — it was just siloed away from a math attack. This bridges
+ * the two: a ONE-SHOT, bounded, web-enabled pass at session start surveys what is ALREADY KNOWN about the
+ * goal (standard approaches + status, known no-go BARRIERS, SOTA, the open frontier) and produces cited
+ * cards. They are injected into every round prompt as established context (read-only — the reasoning loop
+ * still cannot call web), turning the curated barriers.ts into a dynamically-retrieved, cited knowledge
+ * layer and grounding the survey deliverable in the actual literature. Disable: PHILONT_DEEP_EXPLORE_LIT_GROUNDING=0.
+ * In-memory, process-scoped, start-only (lost on restart; barriers still re-derive cheaply on continue).
+ */
+const LIT_GROUNDING_ENABLED = process.env.PHILONT_DEEP_EXPLORE_LIT_GROUNDING !== '0';
+/** Web tools allowed ONLY in the one-shot grounding pass (never in the per-round reasoning whitelist). */
+const WEB_TOOL_NAMES: ReadonlySet<string> = new Set(['webSearch', 'webFetch', 'fetchUrl']);
+/** Iteration cap for the grounding mini-loop. env PHILONT_DEEP_EXPLORE_LIT_GROUNDING_ITERS, default 6, range 1-20. */
+const LIT_GROUNDING_MAX_ITERS = (() => {
+  const n = Number(process.env.PHILONT_DEEP_EXPLORE_LIT_GROUNDING_ITERS);
+  return Number.isInteger(n) && n >= 1 && n <= 20 ? n : 6;
+})();
+/** Wall-clock cap for the grounding pass so it can't eat the turn deadline. env PHILONT_DEEP_EXPLORE_LIT_GROUNDING_TIMEOUT_MS, default 180s, min 30s. */
+const LIT_GROUNDING_TIMEOUT_MS = (() => {
+  const n = Number(process.env.PHILONT_DEEP_EXPLORE_LIT_GROUNDING_TIMEOUT_MS);
+  return Number.isInteger(n) && n >= 30_000 ? n : 180_000;
+})();
+const LIT_GROUNDING_MAX_CARDS = 15;
+
+export interface LiteratureCard {
+  claim: string;
+  type: 'approach' | 'barrier' | 'sota' | 'open' | 'background';
+  source: string;
+}
+
+export const LITERATURE_TYPES: readonly string[] = ['approach', 'barrier', 'sota', 'open', 'background'];
+const LITERATURE_TYPE_SET = new Set(LITERATURE_TYPES);
+function normalizeLiteratureType(raw: unknown): LiteratureCard['type'] {
+  const t = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  return (LITERATURE_TYPE_SET.has(t) ? t : 'background') as LiteratureCard['type'];
+}
+
+/** Parse the grounding pass's final text into cited cards. Tolerant: grabs the first JSON array, validates each item; non-JSON / no array → []. */
+export function parseLiteratureCards(text: string, max = LIT_GROUNDING_MAX_CARDS): LiteratureCard[] {
+  if (!text || !text.trim()) return [];
+  const m = text.match(/\[[\s\S]*\]/);
+  if (!m) return [];
+  let arr: unknown;
+  try {
+    arr = JSON.parse(m[0]);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(arr)) return [];
+  const out: LiteratureCard[] = [];
+  for (const it of arr) {
+    const rec = it as Record<string, unknown>;
+    const claim = typeof rec?.claim === 'string' ? rec.claim.trim() : '';
+    if (!claim) continue;
+    const source = typeof rec?.source === 'string' ? rec.source.trim() : '';
+    out.push({ claim: claim.slice(0, 280), type: normalizeLiteratureType(rec?.type), source: source.slice(0, 160) });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+const LIT_TYPE_LABEL: Record<LiteratureCard['type'], string> = {
+  approach: 'approach', barrier: 'barrier', sota: 'SOTA', open: 'open', background: 'background',
+};
+const LIT_TYPE_ORDER: LiteratureCard['type'][] = ['barrier', 'sota', 'approach', 'open', 'background'];
+
+/** Render literature cards as a header + bullet list (barriers/SOTA first). Empty array → []. Shared by prompt + user milestone. */
+export function renderLiteratureCards(cards: LiteratureCard[]): string[] {
+  if (cards.length === 0) return [];
+  const sorted = [...cards].sort((a, b) => LIT_TYPE_ORDER.indexOf(a.type) - LIT_TYPE_ORDER.indexOf(b.type));
+  const lines = ['## Known from the literature (retrieved this session, cited)'];
+  for (const c of sorted) lines.push(`- [${LIT_TYPE_LABEL[c.type]}] ${c.claim}${c.source ? ` (${c.source})` : ''}`);
+  return lines;
+}
+
+/** Build the systemPrompt for the one-shot literature-grounding pass. */
+export function buildLiteratureGroundingPrompt(goal: string, assumptions: string[]): string {
+  const lines: string[] = [];
+  lines.push('You are doing a one-shot LITERATURE-GROUNDING pass BEFORE a deep reasoning session on a hard problem. Your job is to find what is ALREADY KNOWN — NOT to solve the problem.');
+  lines.push('');
+  lines.push(`## Goal\n${goal}`);
+  if (assumptions.length) lines.push(`\n## Assumptions\n${assumptions.map((a) => `- ${a}`).join('\n')}`);
+  lines.push('');
+  lines.push('## What to retrieve (use webSearch / webFetch)');
+  lines.push('- standard approaches tried on this exact problem, and their status (worked / failed / partial)');
+  lines.push('- KNOWN OBSTRUCTIONS / no-go results / barriers specific to it (e.g. the parity problem for sieve approaches to Goldbach)');
+  lines.push('- the strongest known partial results (SOTA)');
+  lines.push('- what is genuinely still open (the frontier)');
+  lines.push('Prefer textbooks, surveys, papers, and well-known references; be skeptical of crank / low-quality sources.');
+  lines.push('');
+  lines.push('## Output (strict)');
+  lines.push('Output ONLY a JSON array. Each item: {"claim":"<concise load-bearing statement>","type":"<approach|barrier|sota|open|background>","source":"<short citation or URL>"}.');
+  lines.push('8-15 cards max, most load-bearing first. No prose outside the JSON array.');
+  return lines.join('\n');
+}
+
+const sessionLiterature = new Map<string, LiteratureCard[]>();
+/** Prompt lines injecting this session's retrieved literature as established context (empty if none). */
+function renderSessionLiterature(sessionId: string): string[] {
+  const cards = sessionLiterature.get(sessionId);
+  if (!cards || cards.length === 0) return [];
+  const lines = renderLiteratureCards(cards);
+  lines.push(
+    'DIRECTIVE: treat these as established context — build ON them, do not re-derive what is already settled; ' +
+      'if a known barrier here blocks your plan, route around it (named circumvention) or reason_record the wall.',
+  );
+  return ['', ...lines];
+}
+
+/**
  * No-progress early-stop threshold. A round otherwise runs to its full wall-clock cap even when
  * spinning — the prompt pushes "always advance the tree", so the model rarely returns plain text
  * and the loop only ends on the deadline. A round that just fails pariGp / computes endlessly /
@@ -722,6 +833,8 @@ export function renderTreePrompt(session: ReasoningSession, nodes: ReasoningNode
   // Feasibility / no-go gate: surface any KNOWN BARRIER for this goal/method up front, so the blocked
   // step is named before a node is picked (not discovered round 10 after padding the wall with lemmas).
   for (const l of renderSessionBarriers(session.id)) lines.push(l);
+  // Literature grounding: inject what the start-of-session web pass found is already known (cited).
+  for (const l of renderSessionLiterature(session.id)) lines.push(l);
 
   const rawFrontier = computeFrontier(nodes);
   const frontier = VALUE_GUIDED ? rankFrontier(rawFrontier, nodes, UCB_C, NOVELTY_W) : rawFrontier;
@@ -1043,6 +1156,11 @@ const DEEP_EXPLORE_REASONING: ReasoningConfig = {
 const DEEP_EXPLORE_SKEPTIC_REASONING: ReasoningConfig = {
   enabled: true,
   effort: resolveEffort(process.env.PHILONT_DEEP_EXPLORE_SKEPTIC_EFFORT, 'high'),
+};
+/** Reasoning config for the one-shot literature-grounding pass (retrieval + synthesis, not deep proof → medium). env PHILONT_DEEP_EXPLORE_LIT_GROUNDING_EFFORT ∈ {low,medium,high,max}, default medium. */
+const DEEP_EXPLORE_LIT_GROUNDING_REASONING: ReasoningConfig = {
+  enabled: true,
+  effort: resolveEffort(process.env.PHILONT_DEEP_EXPLORE_LIT_GROUNDING_EFFORT, 'medium'),
 };
 
 /** Build the skeptic's systemPrompt: the claim under review + the argument + context; discipline = try hard to refute, when in doubt refute. */
@@ -1529,6 +1647,46 @@ export function createDeepExploreTool(
     };
   }
 
+  /**
+   * One-shot literature-grounding pass (see the LIT_GROUNDING block above). Runs the EXISTING web tools
+   * (from readOnlyToolDefs, normally filtered out of the reasoning loop) in a single bounded mini-loop,
+   * parses cited cards, caches them for prompt injection, and returns them for the start milestone. Fully
+   * graceful: no web tools / disabled / error / timeout → returns [] and the session proceeds without it.
+   */
+  async function groundFromLiterature(session: ReasoningSession): Promise<LiteratureCard[]> {
+    if (!LIT_GROUNDING_ENABLED) return [];
+    const webDefs = readOnlyToolDefs.filter((d) => WEB_TOOL_NAMES.has(d.name));
+    if (webDefs.length === 0) {
+      console.warn('[deep-explore] literature grounding skipped: no web tools available in readOnlyToolDefs');
+      return [];
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), LIT_GROUNDING_TIMEOUT_MS);
+    let cards: LiteratureCard[] = [];
+    try {
+      const result = await runMiniAgentLoop({
+        systemPrompt: buildLiteratureGroundingPrompt(session.goal, session.assumptions),
+        userMessage: 'Run the literature-grounding search for the goal above and output ONLY the JSON array of cards.',
+        llm: miniLoopLLM,
+        toolDefs: webDefs,
+        toolRunner: subTurnToolRunner, // the general runner CAN reach web; the per-round reasoning whitelist still cannot
+        maxIters: LIT_GROUNDING_MAX_ITERS,
+        toolWhitelist: WEB_TOOL_NAMES,
+        onStatus: deps.onStatus,
+        abortSignal: ctrl.signal,
+        reasoning: DEEP_EXPLORE_LIT_GROUNDING_REASONING,
+      });
+      reasoning.addBudgetSpent(session.id, result.llmTokensSpent);
+      cards = parseLiteratureCards(result.finalText, LIT_GROUNDING_MAX_CARDS);
+    } catch (e) {
+      console.warn(`[deep-explore] literature grounding failed: ${String(e).slice(0, 200)}`);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (cards.length) sessionLiterature.set(session.id, cards);
+    return cards;
+  }
+
   async function runRound(session: ReasoningSession): Promise<ToolResult> {
     if (session.budgetSpent >= SESSION_TOKEN_BUDGET) {
       return {
@@ -1823,16 +1981,24 @@ export function createDeepExploreTool(
           ? params.assumptions.filter((a): a is string => typeof a === 'string' && a.trim().length > 0)
           : [];
         const { session } = reasoning.createSession({ goal, assumptions, ownerSessionId: owner });
-        // Feasibility gate: if this goal/method hits a KNOWN BARRIER, warn the user ONCE up front (before
-        // any round burns time) — the parity-problem tooth. Advisory; exploration still proceeds, but the
-        // barrier is named so the user can redirect to a circumvention instead of grinding the wall.
+        // Literature grounding: one-shot web pass surveying what is already known (cited cards), injected
+        // into every round prompt + merged into the start milestone below. Runs before the first round.
+        const litCards = await groundFromLiterature(session);
+        // Feasibility gate: if this goal/method hits a KNOWN BARRIER, name it ONCE up front (before any
+        // round burns time) — the parity-problem tooth. Advisory; exploration still proceeds.
         const applied = ensureBarriers(session).filter((m) => m.severity === 'applies');
+        // Combined grounding milestone: feasibility barriers (curated) + what the literature pass found.
+        const noteParts: string[] = [];
         if (applied.length) {
+          noteParts.push(
+            `⛔ Feasibility check — this goal/method hits a KNOWN BARRIER:\n${renderBarrierAdvisory(applied)}`,
+          );
+        }
+        if (litCards.length) noteParts.push(renderLiteratureCards(litCards).join('\n'));
+        if (noteParts.length) {
           deps.onMilestone?.(
-            `⛔ Feasibility check — this goal/method hits a KNOWN BARRIER before any round runs:\n\n` +
-              `${renderBarrierAdvisory(applied)}\n\n` +
-              `This is advisory — I'll still explore, but the barrier-blocked step is the real obstruction; ` +
-              `consider redirecting to a circumvention above.`,
+            `📚 Grounding for "${goal.slice(0, 60)}${goal.length > 60 ? '…' : ''}":\n\n${noteParts.join('\n\n')}` +
+              `\n\nAdvisory — I'll still explore, but build on what's known and route around any barrier above.`,
           );
         }
         return runRound(session);
