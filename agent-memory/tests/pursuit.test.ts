@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { initSchema, BOOTSTRAP_ROOT_PURSUIT_ID } from '../src/schema.js';
+import { DEFAULT_CONSTITUTION_VALUES, DEFAULT_CONSTITUTION_RED_LINES } from '../src/constitution_defaults.js';
 import {
   PursuitStore,
   ConstitutionOnNonRootError,
@@ -20,6 +21,16 @@ function mkDb(): { db: Database.Database; pursuits: PursuitStore } {
   initSchema(db);
   return { db, pursuits: new PursuitStore(db) };
 }
+
+test('bootstrap: 空库 root 自带 philont charter (constitution values + red lines)', () => {
+  const { pursuits } = mkDb();
+  const root = pursuits.getConstitution(BOOTSTRAP_ROOT_PURSUIT_ID);
+  assert.ok(root, 'root constitution should exist');
+  assert.equal(root.values, DEFAULT_CONSTITUTION_VALUES);
+  assert.deepEqual(root.redLines, [...DEFAULT_CONSTITUTION_RED_LINES]);
+  // sanity: the charter carries the positioning, not an empty placeholder
+  assert.match(root.values ?? '', /second mind|TRUST, CONTINUITY/);
+});
 
 test('bootstrap: 空库 initSchema 后自动有一个 default root pursuit', () => {
   const { pursuits } = mkDb();

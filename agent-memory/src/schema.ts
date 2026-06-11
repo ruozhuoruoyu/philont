@@ -14,6 +14,7 @@
  */
 
 import type Database from 'better-sqlite3';
+import { DEFAULT_CONSTITUTION_VALUES, DEFAULT_CONSTITUTION_RED_LINES } from './constitution_defaults.js';
 
 export const SCHEMA_VERSION = 30;
 
@@ -1170,12 +1171,15 @@ function ensureBootstrapRoot(db: Database.Database): void {
       constitution_governance, created_at, updated_at)
      VALUES (?, NULL, ?, ?, ?, 'active', 1, 'medium', NULL, 'system',
              '[]', NULL, '[]', '[]', 0,
-             NULL, NULL, NULL, NULL, ?, ?)`
+             ?, ?, NULL, NULL, ?, ?)`
   ).run(
     BOOTSTRAP_ROOT_PURSUIT_ID,
     BOOTSTRAP_ROOT_PURSUIT_ID,
     'general assistance',
     'serve whoever talks to me',
+    // Seed philont's charter (who it is / how it serves) as the root constitution — see constitution_defaults.ts.
+    DEFAULT_CONSTITUTION_VALUES,
+    JSON.stringify(DEFAULT_CONSTITUTION_RED_LINES),
     now,
     now,
   );

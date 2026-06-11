@@ -55,6 +55,8 @@ import {
   InMemoryTaskModeStore,
   loadConstitution,
   BOOTSTRAP_ROOT_PURSUIT_ID,
+  DEFAULT_CONSTITUTION_VALUES,
+  DEFAULT_CONSTITUTION_RED_LINES,
   TsDriveRuntime,
   TsTaskCommitmentDrive,
   startAutonomousLoop,
@@ -3760,6 +3762,21 @@ function buildFreshMessages(
     `\nCurrent time: ${nowIso} (${tz}).` +
     ` To get real-time time, call the time tool with timezone=${tz}.`;
 
+  // philont's charter (constitution) — injected into the identity prompt every turn so it actually
+  // shapes behaviour. Source of truth is the pursuit-root constitution (frozen at load); falls back to
+  // the version-controlled defaults when the live root's fields are still NULL (e.g. an older DB), so the
+  // charter takes effect without a DB migration. See agent-memory/src/constitution_defaults.ts.
+  const charterValues = constitution?.values ?? DEFAULT_CONSTITUTION_VALUES;
+  const charterRedLines =
+    constitution?.redLines && constitution.redLines.length
+      ? constitution.redLines
+      : DEFAULT_CONSTITUTION_RED_LINES;
+  const charterBlock =
+    `\n\n## Your charter — who you are and how you serve (constitution)\n${charterValues}` +
+    (charterRedLines.length
+      ? `\n\nRed lines — never cross these:\n${charterRedLines.map((r) => `- ${r}`).join('\n')}`
+      : '');
+
   const init: NativeMessage[] = [
     {
       role: 'user',
@@ -3771,6 +3788,7 @@ function buildFreshMessages(
         ` That learning depends on honesty: never claim success you didn't achieve, and never fabricate a result — an honest failure teaches you, a pretended one corrupts your memory.` +
         ` You stay with one user across channels (WeChat, Telegram, web) and act through a broad, permission-gated toolset` +
         ` — files, shell, web, persistent memory, skills, vision, and mounted MCP servers. Working directory: ${process.cwd()}.` +
+        charterBlock +
         `\n\nTool-use principles:` +
         `\n- Do not call tools for ordinary chit-chat. (Exception: persisting a durable fact the user just revealed is never "chit-chat" — store_fact it even mid-conversation; see the proactive-memory principle below.)` +
         `\n- When the user asks you to "remember / note down / set" any fact (name, preference, role, project info, etc.),` +
