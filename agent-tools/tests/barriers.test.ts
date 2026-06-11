@@ -78,6 +78,53 @@ test('renderBarrierAdvisory is empty for no matches and non-empty otherwise', ()
   assert.match(renderBarrierAdvisory(matchBarriers('twin primes via sieve')), /KNOWN BARRIERS/);
 });
 
+test('ruler-and-compass: trisection WITH the tool applies; with another tool stays goal-hard', () => {
+  const withTool = matchBarriers('trisect an arbitrary angle with straightedge and compass');
+  const a = withTool.find((m) => m.barrier.id === 'straightedge-compass');
+  assert.ok(a && a.severity === 'applies', 'naming ruler+compass → applies (impossible)');
+  // origami CAN trisect, so without the ruler/compass tool it must NOT claim "applies"
+  const origami = matchBarriers('trisect an arbitrary angle using origami folds');
+  const b = origami.find((m) => m.barrier.id === 'straightedge-compass');
+  assert.ok(b && b.severity === 'goal-hard', 'no ruler/compass named → goal-hard, not applies');
+});
+
+test('non-elementary antiderivative (Liouville/Risch) fires on the classic integrand', () => {
+  const matches = matchBarriers('find a closed-form elementary antiderivative of e^{-x^2}');
+  const m = matches.find((x) => x.barrier.id === 'elementary-antiderivative');
+  assert.ok(m && m.severity === 'applies');
+  assert.match(m!.barrier.circumvention, /erf|special function/i);
+});
+
+test("Rice's theorem fires on program equivalence", () => {
+  const matches = matchBarriers('decide program equivalence for two arbitrary programs');
+  assert.ok(matches.find((m) => m.barrier.id === 'rice-theorem' && m.severity === 'applies'));
+});
+
+test('Arrow impossibility fires on a "perfect fair voting rule" goal', () => {
+  const matches = matchBarriers('design a fair ranked voting rule satisfying independence of irrelevant alternatives');
+  assert.ok(matches.find((m) => m.barrier.id === 'arrow-impossibility' && m.severity === 'applies'));
+});
+
+test('tightened tags: decidable problems do NOT trip the undecidability card', () => {
+  // "decide whether N is prime" is decidable — must not match (old bare "decide whether" over-fired).
+  assert.equal(matchBarriers('decide whether a given number is prime').length, 0);
+  // "decide whether this graph is bipartite" is decidable — must not match.
+  assert.equal(matchBarriers('decide whether the graph is bipartite').length, 0);
+  // but the genuinely undecidable phrasing still fires
+  assert.ok(matchBarriers('whether an arbitrary program halts').some((m) => m.barrier.id === 'undecidability'));
+});
+
+test('tightened tags: ordinary "consistency of X" prose does not trip incompleteness', () => {
+  assert.equal(matchBarriers('check the consistency of my API design across services').length, 0);
+  assert.ok(matchBarriers('prove the consistency of PA').some((m) => m.barrier.id === 'incompleteness-consistency'));
+});
+
+test('tightened tags: deciding a SPECIFIC polynomial solvable-by-radicals is not blocked', () => {
+  // per-polynomial solvability is decidable; only the general quintic is the no-go.
+  assert.equal(matchBarriers('is x^5 - x - 1 solvable by radicals').length, 0);
+  assert.ok(matchBarriers('a radical formula for the general quintic').some((m) => m.barrier.id === 'abel-ruffini'));
+});
+
 test('every barrier card is well-formed (ids unique, required fields present)', () => {
   const ids = new Set<string>();
   for (const b of KNOWN_BARRIERS) {

@@ -175,9 +175,13 @@ export const KNOWN_BARRIERS: readonly Barrier[] = [
     title: 'Undecidability — no algorithm decides all instances (Halting / Hilbert 10th / word problem)',
     tags: ['undecidable', 'halting', 'hilbert-tenth', 'mrdp', 'word-problem', 'no-go'],
     goalTags: [
-      'halting problem', 'decide whether', 'decide if', 'decide all', 'algorithm to decide',
-      'general algorithm for', 'hilbert tenth', "hilbert's tenth", 'diophantine solvability',
-      'word problem for groups', 'decision procedure for', 'entscheidungsproblem', 'always terminates',
+      // Tightened: bare "decide whether / decide if" over-fired on DECIDABLE problems (primality, bipartite,
+      // …). Keep triggers that are specifically about the undecidable cases.
+      'halting problem', 'whether an arbitrary program halts', 'whether a program halts',
+      'whether the program halts', 'always halts', 'always terminates', 'hilbert tenth',
+      "hilbert's tenth", 'diophantine solvability', 'solvability of diophantine',
+      'word problem for groups', 'word problem for semigroups', 'entscheidungsproblem',
+      'first-order validity', 'decide first-order',
     ],
     methodTags: [],
     blocks:
@@ -219,8 +223,10 @@ export const KNOWN_BARRIERS: readonly Barrier[] = [
     title: 'Gödel 2nd incompleteness — a system cannot prove its own consistency',
     tags: ['incompleteness', 'godel', 'consistency', 'self-reference', 'no-go'],
     goalTags: [
-      'consistency of', 'prove pa is consistent', 'prove zfc is consistent', 'con(pa)', 'con(zfc)',
-      'prove its own consistency', 'self-consistency', 'goodstein in pa', 'paris-harrington in pa',
+      // Tightened: bare "consistency of" matched ordinary English ("consistency of my design").
+      'consistency of pa', 'consistency of zfc', 'consistency of arithmetic', 'consistency of set theory',
+      'prove pa is consistent', 'prove zfc is consistent', 'con(pa)', 'con(zfc)',
+      'its own consistency', 'prove its own consistency', 'goodstein', 'paris-harrington',
     ],
     methodTags: [],
     blocks:
@@ -240,8 +246,10 @@ export const KNOWN_BARRIERS: readonly Barrier[] = [
     title: 'Abel–Ruffini / Galois — no radical formula for the general quintic',
     tags: ['abel-ruffini', 'galois', 'quintic', 'radicals', 'solvable-group', 'no-go'],
     goalTags: [
+      // Tightened: dropped bare "solvable by radicals" — deciding whether a SPECIFIC polynomial is solvable
+      // is a legitimate (answerable) question; only the GENERAL quintic is the no-go.
       'quintic formula', 'solve the general quintic', 'solve the quintic by radicals', 'radical formula',
-      'general degree 5', 'solve degree 5 by radicals', 'formula in radicals for', 'solvable by radicals',
+      'general degree 5', 'solve degree 5 by radicals', 'general quintic',
     ],
     methodTags: [],
     blocks:
@@ -254,6 +262,104 @@ export const KNOWN_BARRIERS: readonly Barrier[] = [
       'Use non-radical solutions (elliptic / theta functions, Bring radicals), solve only the SOLVABLE-Galois ' +
       'special cases, or compute roots numerically.',
     source: 'Abel 1824; Ruffini; Galois.',
+  },
+  {
+    id: 'straightedge-compass',
+    title: 'Ruler-and-compass impossibilities (Wantzel; Lindemann) — trisection, cube, circle',
+    tags: ['constructibility', 'straightedge-compass', 'galois', 'wantzel', 'geometry', 'no-go'],
+    goalTags: [
+      'trisect the angle', 'trisect an angle', 'trisect an arbitrary angle', 'trisecting', 'angle trisection',
+      'double the cube', 'doubling the cube', 'duplicate the cube', 'square the circle', 'squaring the circle',
+      'constructible number', 'is constructible', 'regular heptagon', 'regular 7-gon', 'regular nonagon',
+      'regular n-gon', 'construct a regular polygon',
+    ],
+    // The tool IS the constraint: name it and the impossibility is exact. Without it (origami / neusis /
+    // quadratrix) several of these ARE possible, so a goal with no tool named stays "goal-hard", not "applies".
+    methodTags: ['straightedge', 'compass', 'ruler and compass', 'ruler-and-compass', 'compass and straightedge'],
+    blocks:
+      'A point is ruler-and-compass constructible iff its coordinates lie in a tower of degree-2 extensions ' +
+      'of ℚ (so its degree over ℚ is a power of 2) — Wantzel. Hence, with straightedge and compass alone: ' +
+      'trisecting a general angle (needs a degree-3 root, e.g. of 8x³−6x−1) is impossible; doubling the cube ' +
+      '(∛2, degree 3) is impossible; squaring the circle (√π, and π is transcendental — Lindemann) is ' +
+      'impossible; and a regular n-gon is constructible only for n = 2^k · (product of distinct Fermat primes).',
+    whyHere:
+      'These are not "we have not found the construction yet" problems — the algebra proves no ruler-and-compass ' +
+      'sequence can reach the target. Searching for one is searching for something that does not exist.',
+    circumvention:
+      'Use a stronger toolset: neusis (a marked ruler) or origami trisects angles and doubles the cube; a ' +
+      'quadratrix squares the circle; or accept the constructible cases only (n-gon: n = 2^k · ∏ distinct ' +
+      'Fermat primes), or a numerical approximation. With straightedge and compass alone it is provably impossible.',
+    source: 'Wantzel 1837; Lindemann 1882 (π transcendental); Gauss–Wantzel (regular n-gon).',
+  },
+  {
+    id: 'elementary-antiderivative',
+    title: 'Non-elementary antiderivatives (Liouville; Risch) — no closed form exists',
+    tags: ['integration', 'liouville', 'risch', 'antiderivative', 'closed-form', 'no-go'],
+    goalTags: [
+      'elementary antiderivative', 'elementary form of the antiderivative', 'closed-form antiderivative',
+      'no elementary antiderivative', 'antiderivative in elementary terms', 'e^(-x^2)', 'e^{-x^2}',
+      'exp(-x^2)', 'sin(x)/x', 'e^x/x', '1/ln(x)', '1/log(x)',
+    ],
+    methodTags: [],
+    blocks:
+      'By Liouville’s theorem (made algorithmic by the Risch algorithm), many elementary functions have NO ' +
+      'elementary antiderivative — e.g. e^(−x²), e^x/x, sin(x)/x, 1/ln(x), √(1+x³). No integration technique ' +
+      'will yield a closed elementary form, because none exists; the Risch algorithm DECIDES this.',
+    whyHere:
+      'Hunting for "the trick" to integrate these in closed form is a dead end: the obstruction is a theorem, ' +
+      'not a gap in cleverness. Recognise the integrand as one of the classic non-elementary forms.',
+    circumvention:
+      'Use the special functions DEFINED as these antiderivatives (erf, Ei, Si, li, elliptic integrals); or a ' +
+      'series / numerical evaluation; for a DEFINITE integral, contour or parameter-differentiation tricks may ' +
+      'still give a closed value even though the indefinite form is non-elementary.',
+    source: 'Liouville (1830s); Risch 1969 (decision procedure for elementary integration).',
+  },
+  {
+    id: 'rice-theorem',
+    title: 'Rice’s theorem — every non-trivial semantic property of programs is undecidable',
+    tags: ['rice', 'undecidable', 'program-analysis', 'semantics', 'computability', 'no-go'],
+    goalTags: [
+      'rice theorem', "rice's theorem", 'program equivalence', 'two programs are equivalent',
+      'programs are equivalent', 'non-trivial property of programs', 'semantic property of programs',
+      'behavioral property of programs', 'whether a program computes', 'property of all programs',
+    ],
+    methodTags: [],
+    blocks:
+      'Rice’s theorem: EVERY non-trivial semantic (extensional) property of the partial function a program ' +
+      'computes is undecidable. So there is no general algorithm to decide program equivalence, whether a ' +
+      'program computes a given function, whether it ever prints X, etc. (the Halting problem is one instance).',
+    whyHere:
+      'A goal of "a sound AND complete analyzer that decides behaviour B for every program" is impossible for ' +
+      'any non-trivial B. Effort should go to a decidable approximation, not a perfect decider.',
+    circumvention:
+      'Decide a SYNTACTIC property instead, restrict to a non-Turing-complete language (finite-state / total ' +
+      'languages), or accept a sound-but-incomplete analysis (type systems, abstract interpretation, model ' +
+      'checking with bounds) that may answer "don’t know".',
+    source: 'Rice 1953.',
+  },
+  {
+    id: 'arrow-impossibility',
+    title: 'Arrow’s impossibility — no perfect ranked voting rule (≥3 alternatives)',
+    tags: ['arrow', 'social-choice', 'voting', 'impossibility', 'mechanism-design', 'no-go'],
+    goalTags: [
+      'voting system', 'voting rule', 'ranked voting', 'rank aggregation', 'social choice',
+      'independence of irrelevant alternatives', 'preference aggregation', "arrow's theorem",
+      'arrow impossibility', 'fair voting rule', 'perfect voting',
+    ],
+    methodTags: [],
+    blocks:
+      'Arrow’s theorem: for ≥3 alternatives, NO ranked-preference aggregation rule can satisfy all of ' +
+      'unrestricted domain, Pareto efficiency, independence of irrelevant alternatives (IIA), and ' +
+      'non-dictatorship simultaneously. A "perfectly fair" ordinal voting rule with all four cannot exist. ' +
+      'Gibbard–Satterthwaite gives the parallel impossibility for strategy-proofness.',
+    whyHere:
+      'Designing a rule and then checking all four axioms is doomed — the conflict is a theorem. One of the ' +
+      'axioms must be dropped or weakened by construction.',
+    circumvention:
+      'Restrict the domain (single-peaked preferences → median-voter / Black’s rule), or leave the ordinal ' +
+      'frame for CARDINAL information (range / approval / score voting escape IIA), or accept an explicit ' +
+      'trade-off among the axioms.',
+    source: 'Arrow 1951; Gibbard 1973; Satterthwaite 1975.',
   },
 ];
 
@@ -344,7 +450,9 @@ export const barrierCheckTool: Tool = {
     'results proving that a whole class of method CANNOT settle a class of problem. Covers the parity problem ' +
     '(sieves cannot prove binary Goldbach / twin primes), the binary circle-method minor-arc gap, ' +
     'relativization / natural-proofs / algebrization (P vs NP), undecidability (halting / Hilbert 10th / word ' +
-    'problem), independence from ZFC (CH), Gödel 2nd incompleteness, and Abel–Ruffini (general quintic). ' +
+    'problem) and Rice (program properties), independence from ZFC (CH), Gödel 2nd incompleteness, ' +
+    'Abel–Ruffini (general quintic), ruler-and-compass impossibilities (trisection / doubling the cube / ' +
+    'squaring the circle), non-elementary antiderivatives (Liouville/Risch), and Arrow (voting). ' +
     'Call this BEFORE committing rounds to a hard conjecture: if your method is blocked, the tool names the ' +
     'obstruction and the only known circumventions, so you can switch method or record the wall honestly ' +
     'instead of grinding it. Query with the goal + intended method (e.g. "prove binary goldbach with the ' +
