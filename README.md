@@ -261,4 +261,3 @@ We also reference [Claude Code](https://claude.com/claude-code)'s WebFetch desig
 
 MIT — see [LICENSE](LICENSE).
 
-Built by [xiaozhou ye](https://github.com/ruozhuoruoyu).
