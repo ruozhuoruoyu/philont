@@ -241,3 +241,10 @@ test('PHILONT_PLAN_GATE_EXEMPT_READONLY=0 → 整体回退严模式(read 也拦)
     }
   }
 });
+
+test('isPlanGateExempt: deep_explore is exempt (its own deep-work protocol, not stacked behind plan)', () => {
+  // execute×self would otherwise be blocked; deep_explore must be directly choosable in slow mode.
+  assert.equal(isPlanGateExempt('deep_explore', { capability: 'execute', domain: 'self' }), true);
+  // and even with no classification available
+  assert.equal(isPlanGateExempt('deep_explore', null), true);
+});

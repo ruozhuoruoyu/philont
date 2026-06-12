@@ -80,6 +80,9 @@ export function createTaskModeTools(deps: TaskModeToolsDeps): MemoryTool[] {
     name: 'task_mode_classify',
     description:
       '自评本次任务的复杂度,决定是否进入慢思考协议(plan_draft → plan_update_step → plan_close)。' +
+      '\n\n【先排除:探索/审议型问题不走 plan 协议】用户要"深入探索/深入想清楚/帮我权衡/深攻一个难题"这类**开放问题**' +
+      '(产出是理解/结论,不是对外部世界的执行)→ 直接调 deep_explore(它自带分解→验证→跨轮协议,豁免 plan 门),不要 classify。' +
+      'plan 协议管的是**执行型任务**(部署/注册/发消息/改数据/产出文件)。' +
       '\n\n【调用前先自问 4 题 — 任一 yes → slow】' +
       '\nQ1 任务有 ≥ 2 个**独立可验证输出**?(例:"注册+发首条" = 2;"查 X" = 1)' +
       '\nQ2 步骤间有**依赖**(B 必须等 A 的结果,如先拿 token 才能调 API)?' +
@@ -178,7 +181,8 @@ export function createTaskModeTools(deps: TaskModeToolsDeps): MemoryTool[] {
       store.set(sessionId, mode, reason);
       const nextHint =
         mode === 'slow'
-          ? '\n下一步:**必须**调 plan_draft 把任务拆成可验证步骤(机制层已禁其它工具直到 plan_review pass)。'
+          ? '\n下一步:**必须**调 plan_draft 把任务拆成可验证步骤(机制层已禁其它工具直到 plan_review pass)。' +
+            '\n(例外:若这其实是"深入探索/审议一个开放问题"而非执行任务,直接调 deep_explore — 它豁免 plan 门,自带更严的逐 claim 验证协议。)'
           : '\n继续按 fast 模式工作,不需要走 plan 协议。';
       return {
         success: true,

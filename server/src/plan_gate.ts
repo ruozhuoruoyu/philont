@@ -121,6 +121,12 @@ export function isPlanGateExempt(
 ): boolean {
   if (toolName === 'task_mode_classify') return true;
   if (toolName.startsWith('plan_')) return true;
+  // deep_explore is its own deep-work protocol (decompose → verify per claim → cross-turn tracking),
+  // with rigor at least equal to the plan flow. Gating it behind plan_draft stacks two protocols and
+  // (observed in production) locked the exploration pathway out entirely: the classifier picked slow
+  // mode for an exploration-shaped request, then the gate banned deep_explore until a plan was
+  // drafted — so the model fell back to inline web searching. Let it be chosen directly.
+  if (toolName === 'deep_explore') return true;
   // askUserQuestion is classified as read×local, but during the plan-drafting phase
   // the LLM must not ask the user (prevents offloading responsibility).
   // Legitimate use is during the plan-executing phase where the gate already opens all tools.
