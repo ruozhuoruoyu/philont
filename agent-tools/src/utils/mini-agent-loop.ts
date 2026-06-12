@@ -122,6 +122,13 @@ export interface MiniAgentLoopOptions {
   abortSignal?: AbortSignal;
   /** Reasoning / thinking-mode control for every LLM call in this loop. Forwarded into llm.send. */
   reasoning?: ReasoningConfig;
+  /**
+   * When the iteration cap is hit with no final text, make ONE more text-only LLM call (no tools) asking
+   * the model to produce its final answer from what it has gathered — the full tool-result history is
+   * still in context. For loops whose VALUE is the final synthesis (e.g. a bounded research pass that
+   * must end in a JSON summary), a capped run otherwise wastes every tool call it made. Off by default.
+   */
+  synthesizeOnCap?: boolean;
 }
 
 export interface MiniLoopToolCallRecord {
@@ -337,6 +344,32 @@ export async function runMiniAgentLoop(
 
   // Hit maxIters
   onStatus?.(`⚠ hit max iters (${maxIters})`);
+  // Optional salvage: one text-only call so the gathered tool results aren't wasted (see synthesizeOnCap).
+  if (opts.synthesizeOnCap && !abortSignal?.aborted) {
+    messages.push({
+      role: 'user',
+      content:
+        'Tool budget exhausted — do NOT request more tools. Produce your FINAL answer now, in the exact ' +
+        'output format the instructions require, using only what you have already gathered above.',
+    });
+    try {
+      const final = await llm.send(systemPrompt, messages, [], { signal: abortSignal, reasoning });
+      if (final.type === 'text' && final.content.trim()) {
+        llmTokensSpent += final.tokensUsed ?? estimateTokens(final.content);
+        onStatus?.('✓ synthesized final answer after cap');
+        return {
+          finalText: final.content,
+          toolCallHistory,
+          itersUsed: maxIters,
+          hitCap: true,
+          llmTokensSpent,
+          toolCallsSpent,
+        };
+      }
+    } catch {
+      /* salvage is best-effort; fall through to the empty-text cap return */
+    }
+  }
   return {
     finalText: '',
     toolCallHistory,

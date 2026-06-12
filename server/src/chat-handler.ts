@@ -3832,7 +3832,7 @@ function buildFreshMessages(
         `\n  - **When not**: a skill matches / single-step / tasks needing mid-way user input / clearly ≤3-step small tasks.` +
         `\n\n**Reply-format contract (applies to all channels)**: your final text reply MUST use this two-section markdown:\n` +
         `\n## For User\n` +
-        `<concise content for the user-facing client, default ≤ ~200 characters, conclusion + necessary progress only. WeChat and similar terminals push **only** this section.>\n` +
+        `<content for the user-facing client. WeChat and similar terminals push **only** this section — anything outside it is NEVER delivered. Default concise (≤ ~200 chars, conclusion + necessary progress). **BUT when the user asked for an analysis / report / detailed answer, this section must carry the COMPLETE deliverable** — never a one-line conclusion with the substance left in Work Log (the user cannot see it; they will rightly complain the analysis is missing).>\n` +
         `\n## Work Log\n` +
         `<full reasoning / table restatement / tool-result dump / self-check. Goes **only** to the timeline, not pushed to the user. May be detailed.>\n` +
         `\nThe two-section format applies only to the **final natural-language reply**; during tool-calling, emit tool_use as usual without these headings.\n` +
@@ -5294,7 +5294,9 @@ function isDeepExploreAdvance(call: { name: string; input: unknown }): boolean {
 const DEEP_EXPLORE_ONE_ROUND_MSG =
   'Each turn advances deep_explore by at most one round (~15 min) to stay under the turn time limit. ' +
   'This turn already ran one round and saved the tree. Tell the user the round is done and to reply "continue" ' +
-  'to advance the next round in a fresh turn — do NOT call deep_explore(start/continue/discover) again this turn.';
+  'to advance the next round in a fresh turn — do NOT call deep_explore(start/continue/discover) again this turn. ' +
+  'IMPORTANT: this blocked call did NOT run a round — when summarizing, count ONLY the one round that actually ran ' +
+  '(do not report blocked attempts as extra rounds).';
 
 /**
  * 2026-06-08: anti-fabrication gate (mechanism layer — prompt-level guidance kept failing).

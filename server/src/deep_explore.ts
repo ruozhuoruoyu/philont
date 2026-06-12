@@ -1232,8 +1232,8 @@ export function renderDeliberatePrompt(session: ReasoningSession, nodes: Reasoni
   lines.push('');
   lines.push('## How to deliberate (discipline)');
   lines.push('1. **Decompose first.** Round 1 must split the question into 2–5 concrete, answerable sub-questions — do NOT browse before there is a tree.');
-  lines.push('2. Pick the most important open sub-question; gather evidence for it (the user’s own data first, then the web). **A sub-question is SETTLED only when its conclusion is backed by cited evidence — attach it via `evidence`.**');
-  lines.push('3. **Actively seek DISCONFIRMING evidence**, not just support. Record an option/hypothesis as refuted when the evidence is against it (cite the source).');
+  lines.push('2. **Work ONE sub-question at a time, and SETTLE it before touching another.** Pick the most important open one, gather evidence for it (the user’s own data first, then the web — 2–4 focused lookups is usually enough), then IMMEDIATELY reason_record it with the conclusion + `evidence`. Broad-crawling across many sub-questions without committing any is the failure mode that gets the round cut for no progress — searches you never commit to the tree are LOST.');
+  lines.push('3. **A sub-question is SETTLED only when its conclusion is backed by cited evidence — attach it via `evidence`.** Actively seek DISCONFIRMING evidence, not just support; record an option/hypothesis as refuted when the evidence is against it (cite the source).');
   lines.push('4. Do not let an assertion masquerade as a finding. If you cannot find evidence, say so and leave the sub-question open — an honest "unresolved" beats a fabricated conclusion.');
   lines.push('5. **Only use real node ids** from the tree / returned by decompose; never invent ids.');
   lines.push('6. When evidence is genuinely unavailable → reason_record(dead_end, approach="what you tried / what evidence is missing").');
@@ -2004,7 +2004,11 @@ export function createDeepExploreTool(
     let cards: LiteratureCard[] = [];
     try {
       const result = await runMiniAgentLoop({
-        systemPrompt: profile.buildGroundingPrompt(session.goal, session.assumptions),
+        systemPrompt:
+          profile.buildGroundingPrompt(session.goal, session.assumptions) +
+          `\n\nBUDGET: you have at most ${LIT_GROUNDING_MAX_ITERS} tool round-trips. Search broadly in the first ` +
+          `1-2 rounds, read selectively, and OUTPUT THE JSON ARRAY no later than round ${Math.max(2, LIT_GROUNDING_MAX_ITERS - 1)} — ` +
+          `a pass that spends every round searching and never outputs the array delivers nothing.`,
         userMessage: 'Run the grounding search for the goal/question above and output ONLY the JSON array of cards.',
         llm: miniLoopLLM,
         toolDefs: webDefs,
@@ -2014,6 +2018,9 @@ export function createDeepExploreTool(
         onStatus: deps.onStatus,
         abortSignal: ctrl.signal,
         reasoning: DEEP_EXPLORE_LIT_GROUNDING_REASONING,
+        // Observed in production: the pass burned all its iterations on searches and never emitted the
+        // JSON → 0 cards, every search wasted. Salvage with one text-only synthesis call on cap.
+        synthesizeOnCap: true,
       });
       reasoning.addBudgetSpent(session.id, result.llmTokensSpent);
       cards = parseLiteratureCards(result.finalText, LIT_GROUNDING_MAX_CARDS);
@@ -2291,7 +2298,11 @@ export function createDeepExploreTool(
       '• mode="deliberate": a general open-ended JUDGMENT — decisions ("should I take this offer / pivot to ' +
       'B2B"), root-cause diagnosis ("why is retention dropping"), due diligence, untangling a multi-party ' +
       'situation. Claims are settled by CITED EVIDENCE (the user\'s own data + the web), not proof.\n' +
-      'Call it when the user wants to think something hard through deeply over time — NOT for ordinary Q&A.\n' +
+      'ROUTING (IMPORTANT): when the user says 深入想清楚 / 深入分析 / 帮我权衡 / "think this through deeply" about an ' +
+      'open-ended question, you MUST start a session here (mode=deliberate for judgment questions) instead of answering ' +
+      'inline with a burst of web searches — an inline answer is one-pass, adversarially UNVERIFIED, and not persisted ' +
+      '(a follow-up restarts from zero), while a session verifies every finding and accumulates across turns. ' +
+      'NOT for ordinary Q&A or quick lookups.\n' +
       'action="start": open a new reasoning session (goal = the proposition/question; pick mode; assumptions/context optional) and advance one round.\n' +
       'action="continue": keep advancing the most recent in-progress session (no id needed).\n' +
       'action="discover": **experimental-math mode** — use pariGp to compute data and find patterns, propose evidence-backed new conjectures and prune them by counterexample search, ' +
