@@ -508,8 +508,10 @@ export function withNoProgressStop(
     } else if (r.ok && callsSinceProgress >= nudgeAt && callsSinceProgress < cap) {
       r.output =
         `${r.output}\n\n⚠ MECHANISM WARNING: ${callsSinceProgress} tool calls without a tree commit — ` +
-        `this round is cut as no-progress at ${cap}. STOP gathering and reason_record the node you are ` +
-        `working on NOW (conclusion + \`evidence\`; note any remaining uncertainty in \`result\`).`;
+        `this round is cut as no-progress at ${cap}. STOP gathering and commit NOW, one of: ` +
+        `(a) reason_record(proved/settled) with conclusion + \`evidence\` (note remaining uncertainty in \`result\`); ` +
+        `(b) the evidence is genuinely not findable → reason_record(dead_end, approach="what you searched / what is missing") — ` +
+        `an honest "unresolved" IS progress; more hunting is not.`;
     }
     // Time-aware stop: a round that has not committed ANYTHING to the tree for too long is spinning
     // (e.g. all-pariGp, never decomposes). The call-count cap above misses this when iterations are
@@ -1600,6 +1602,10 @@ export async function runAdversarialVerification(opts: {
       abortSignal: opts.abortSignal,
       // 2026-06-07: skeptics are independent verifiers → high reasoning effort (tunable via PHILONT_DEEP_EXPLORE_SKEPTIC_EFFORT).
       reasoning: DEEP_EXPLORE_SKEPTIC_REASONING,
+      // Observed in production (deliberate mode): web-enabled skeptics burned all their iterations
+      // browsing and emitted NO verdict → every reviewer abstained → fail-open accept. Force a final
+      // text-only verdict from what they read instead of a silent abstention.
+      synthesizeOnCap: true,
     }).then(
       (r) => ({ verdict: parseSkepticVerdict(r.finalText), tokens: r.llmTokensSpent }),
       () => ({ verdict: null, tokens: 0 }), // single skeptic error = abstain, does not drag down the whole run
