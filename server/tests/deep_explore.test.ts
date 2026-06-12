@@ -44,6 +44,7 @@ import {
   DELIBERATE_RESEARCH_ALLOW,
   renderDeliberatePrompt,
   buildDeliberateSkepticPrompt,
+  buildDeliberateGroundingPrompt,
 } from '../src/deep_explore.js';
 
 function node(over: Partial<ReasoningNode>): ReasoningNode {
@@ -883,4 +884,16 @@ test('buildDeliberateSkepticPrompt: an evidence reviewer, not a proof-gap review
   assert.match(s, /evidence reviewer/i);
   assert.match(s, /actually supported by the cited evidence/i);
   assert.match(s, /VERDICT: REFUTED/); // reuses the shared verdict parser format
+});
+
+test('grounding prompt is profile-aware: formal=literature/no-go, deliberate=factors/tradeoffs', () => {
+  const f = FORMAL_PROFILE.buildGroundingPrompt('prove twin primes', []);
+  assert.match(f, /KNOWN OBSTRUCTIONS|approaches tried|SOTA/i);
+  const d = DELIBERATE_PROFILE.buildGroundingPrompt('该用 DeepSeek 还是 Claude', []);
+  assert.equal(d, buildDeliberateGroundingPrompt('该用 DeepSeek 还是 Claude', []));
+  assert.match(d, /KEY FACTORS/);
+  assert.match(d, /TRADEOFFS|constraints it cannot escape/);
+  assert.match(d, /PITFALLS/);
+  assert.ok(!/parity problem|proof|lemma/i.test(d), 'deliberate grounding must not be math-flavored');
+  assert.match(d, /ONLY a JSON array/);
 });

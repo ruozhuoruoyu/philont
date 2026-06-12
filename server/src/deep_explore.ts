@@ -406,6 +406,32 @@ export function buildLiteratureGroundingPrompt(goal: string, assumptions: string
   return lines.join('\n');
 }
 
+/**
+ * Grounding prompt for DELIBERATE mode: survey what is already known that BEARS ON a hard decision/question —
+ * key factors, hard tradeoffs it can't escape, reference points/base-rates, what's uncertain, common pitfalls.
+ * Reuses the same card schema (type ∈ approach|barrier|sota|open|background) with deliberation meanings.
+ */
+export function buildDeliberateGroundingPrompt(goal: string, assumptions: string[]): string {
+  const lines: string[] = [];
+  lines.push('You are doing a one-shot GROUNDING pass BEFORE deliberating a hard, open-ended question. Your job is to surface what is ALREADY KNOWN that bears on it — NOT to answer it.');
+  lines.push('');
+  lines.push(`## The question\n${goal}`);
+  if (assumptions.length) lines.push(`\n## Given context\n${assumptions.map((a) => `- ${a}`).join('\n')}`);
+  lines.push('');
+  lines.push('## What to retrieve (use webSearch / webFetch)');
+  lines.push('- the KEY FACTORS that actually decide this kind of question → type="approach"');
+  lines.push('- hard TRADEOFFS / constraints it cannot escape ("you cannot have all of X, Y, Z at once") → type="barrier"');
+  lines.push('- strong REFERENCE POINTS: what comparable cases/people did, benchmarks, base rates → type="sota"');
+  lines.push('- the points that are genuinely UNCERTAIN or contested → type="open"');
+  lines.push('- common PITFALLS / mistakes people make on this exact decision → type="background"');
+  lines.push('Prefer reputable, specific sources; be skeptical of marketing and anecdote.');
+  lines.push('');
+  lines.push('## Output (strict)');
+  lines.push('Output ONLY a JSON array. Each item: {"claim":"<concise load-bearing point>","type":"<approach|barrier|sota|open|background>","source":"<short citation or URL>"}.');
+  lines.push('8-15 cards max, most decision-relevant first. No prose outside the JSON array.');
+  return lines.join('\n');
+}
+
 const sessionLiterature = new Map<string, LiteratureCard[]>();
 /** Prompt lines injecting this session's retrieved literature as established context (empty if none). */
 function renderSessionLiterature(sessionId: string): string[] {
@@ -1295,6 +1321,8 @@ export interface ReasoningProfile {
   settledVerb: string;
   buildRoundPrompt(session: ReasoningSession, nodes: ReasoningNode[], lessons: string[]): string;
   buildUserMessage(session: ReasoningSession, isFresh: boolean): string;
+  /** One-shot start-of-session grounding pass prompt (formal: literature/SOTA/no-go; deliberate: factors/tradeoffs/pitfalls). */
+  buildGroundingPrompt(goal: string, assumptions: string[]): string;
   buildSkepticPrompt(
     claim: string,
     argument: string | null,
@@ -1318,6 +1346,7 @@ export const FORMAL_PROFILE: ReasoningProfile = {
         `pariGp or any computation before the root is decomposed — a round that only computes without ` +
         `committing to the tree wastes the entire time budget and will be cut short.`
       : 'Continue advancing the current reasoning tree; prefer the most promising open node on the frontier.',
+  buildGroundingPrompt: (goal, assumptions) => buildLiteratureGroundingPrompt(goal, assumptions),
   buildSkepticPrompt: (claim, argument, goal, assumptions, settledClaims) =>
     buildSkepticSystemPrompt(claim, argument, goal, assumptions, settledClaims),
   settlePrecheck: () => ({ ok: true }),
@@ -1336,6 +1365,7 @@ export const DELIBERATE_PROFILE: ReasoningProfile = {
         `before the question is decomposed — a round that only browses without committing sub-questions to ` +
         `the tree wastes the budget and will be cut short.`
       : 'Continue: pick the most important open sub-question, gather evidence (the user’s memory & files first, then the web) for it, and settle it ONLY when the conclusion is backed by cited evidence.',
+  buildGroundingPrompt: (goal, assumptions) => buildDeliberateGroundingPrompt(goal, assumptions),
   buildSkepticPrompt: (claim, argument, goal, assumptions, settledClaims) =>
     buildDeliberateSkepticPrompt(claim, argument, goal, assumptions, settledClaims),
   settlePrecheck: (node, _result, incomingEvidence) => {
@@ -1953,13 +1983,15 @@ export function createDeepExploreTool(
       console.warn('[deep-explore] literature grounding skipped: no web tools available in readOnlyToolDefs');
       return [];
     }
+    // Profile-aware grounding: formal surveys literature/SOTA/no-go; deliberate surveys factors/tradeoffs/pitfalls.
+    const profile = PROFILES[session.mode] ?? FORMAL_PROFILE;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), LIT_GROUNDING_TIMEOUT_MS);
     let cards: LiteratureCard[] = [];
     try {
       const result = await runMiniAgentLoop({
-        systemPrompt: buildLiteratureGroundingPrompt(session.goal, session.assumptions),
-        userMessage: 'Run the literature-grounding search for the goal above and output ONLY the JSON array of cards.',
+        systemPrompt: profile.buildGroundingPrompt(session.goal, session.assumptions),
+        userMessage: 'Run the grounding search for the goal/question above and output ONLY the JSON array of cards.',
         llm: miniLoopLLM,
         toolDefs: webDefs,
         toolRunner: subTurnToolRunner, // the general runner CAN reach web; the per-round reasoning whitelist still cannot
