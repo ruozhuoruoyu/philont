@@ -952,3 +952,21 @@ test('withNoProgressStop injects an in-band commit nudge at half budget (mechani
   const after = await w.runner('webSearch', {});
   assert.ok(!/MECHANISM WARNING/.test(after.output), 'nudge must reset after a tree commit');
 });
+
+test('action=abandon truly closes the session (continue/status stop resuming it)', async () => {
+  const mem = openMemoryDb(':memory:');
+  const llm: MiniLoopLLMClient = { async send() { return { type: 'text' as const, content: 'x' }; } };
+  const { tool } = createDeepExploreTool({
+    reasoning: mem.reasoning, miniLoopLLM: llm,
+    subTurnToolRunner: async () => ({ ok: true, output: '' }), readOnlyToolDefs: [],
+  });
+  const { session } = mem.reasoning.createSession({ goal: 'drop me', mode: 'deliberate' });
+  const r = await tool.execute({ action: 'abandon' });
+  assert.equal(r.success, true);
+  assert.match(r.output, /CLOSED \(abandoned\)/);
+  assert.equal(mem.reasoning.getSession(session.id)!.status, 'abandoned');
+  assert.equal(mem.reasoning.getMostRecentActiveSession(), null); // no longer resumable
+  const again = await tool.execute({ action: 'abandon' });
+  assert.match(again.output, /No active deep-explore session/);
+  mem.close();
+});

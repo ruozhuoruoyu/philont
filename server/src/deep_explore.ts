@@ -2332,11 +2332,12 @@ export function createDeepExploreTool(
       'action="status": just view the current tree\'s progress, without advancing. ' +
       '**Grounding rule: before you state ANY claim about exploration state — what is proved, what is still open, how many nodes, or whether a direction is "new/untried" — you MUST call action=status first and base the claim on what it returns. Never assert tree state, progress, or novelty from memory.** (status is read-only and needs no authorization.)\n' +
       'action="finalize": produce a wrap-up report of the whole tree so far (established lemmas, refuted/dead-end branches, most promising open directions), without advancing. ' +
-      'Use this to give the user a conclusion when they ask to wrap up / for results, or for an open-ended problem that will not converge to a clean "solved" on its own.',
+      'Use this to give the user a conclusion when they ask to wrap up / for results, or for an open-ended problem that will not converge to a clean "solved" on its own.\n' +
+      'action="abandon": CLOSE the current session for good (it stops being resumable). Use when the user asks to close/drop/stop the exploration — finalize alone does NOT close anything.',
     schema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['start', 'continue', 'discover', 'status', 'finalize', 'auto_on', 'auto_off'] },
+        action: { type: 'string', enum: ['start', 'continue', 'discover', 'status', 'finalize', 'abandon', 'auto_on', 'auto_off'] },
         mode: { type: 'string', enum: ['formal', 'deliberate'], description: 'action=start: "formal" (default, math/proof) or "deliberate" (general evidence-based judgment — decisions/diagnosis/due-diligence).' },
         goal: { type: 'string', description: 'action=start: the proposition to prove (formal) or the question to think through (deliberate)' },
         seed: { type: 'string', description: 'action=explore optional: the topic/object to focus this round on (e.g. a family of polynomials, a sequence)' },
@@ -2471,6 +2472,22 @@ export function createDeepExploreTool(
         const report = (PROFILES[session.mode] ?? FORMAL_PROFILE).renderReport(session, reasoning.getNodes(session.id));
         deps.onMilestone?.(report); // persist as a chat bubble so the conclusion is not lost
         return { success: true, output: report };
+      }
+
+      if (action === 'abandon') {
+        // Close a session FOR REAL. Observed in production: asked to close, the model ran finalize
+        // (which only reports — the session stays active) and then told the user "closed" — a lie
+        // forced by a missing capability. abandon sets status='abandoned' so continue/status/finalize
+        // stop resuming it; the tree stays in the DB.
+        const session = reasoning.getMostRecentActiveSession(owner);
+        if (!session) return { success: true, output: 'No active deep-explore session to abandon.' };
+        reasoning.setSessionStatus(session.id, 'abandoned');
+        return {
+          success: true,
+          output:
+            `Session "${session.goal.slice(0, 80)}${session.goal.length > 80 ? '…' : ''}" (${session.id}) is now CLOSED (abandoned). ` +
+            `It will no longer be resumed by continue/status/finalize. Start a new session anytime with action=start.`,
+        };
       }
 
       if (action === 'auto_on' || action === 'auto_off') {

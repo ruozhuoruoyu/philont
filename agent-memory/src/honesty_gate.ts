@@ -225,7 +225,8 @@ export interface HonestyEvaluation {
     | 'memory_claim_without_write'
     | 'fabricated_size_claim'
     | 'fabricated_reasoning_state'
-    | 'fabricated_round_result';
+    | 'fabricated_round_result'
+    | 'artifact_claim_without_tools';
   /** Matched claim phrase (used as reference in reminder message) */
   matchedClaim: string;
   /** tool_result counts for this turn */
@@ -461,9 +462,30 @@ export function evaluateHonesty(
   const claim = findCompletionClaim(assistantText);
   if (!claim) return null;
 
-  // Completely no tool results → indeterminate. Could be a "pure conversation" reply,
-  // or state inherited from an earlier turn. This is not a lying signal, pass through.
-  if (ok + fail + unknown === 0) return null;
+  // Completely no tool results → USUALLY indeterminate (a pure-conversation reply, or state inherited
+  // from an earlier turn) — pass through. EXCEPTION (observed in production, V4 Flash): a completion
+  // claim that names a CONCRETE FILE ARTIFACT ("更新了文档到 E:\...\方案_v3.md") with ZERO tool calls
+  // this turn is almost certainly fabricated — the file write it describes never happened (the user
+  // checked: exists=false). A specific artifact path is a this-turn deliverable claim, not inherited
+  // chit-chat, so it must be backed by at least one tool call.
+  if (ok + fail + unknown === 0) {
+    const artifact = findArtifactPathClaim(assistantText);
+    if (artifact) {
+      return {
+        severity: 'high',
+        reason: 'artifact_claim_without_tools',
+        matchedClaim: `${claim} → ${artifact}`,
+        okCount: ok,
+        failCount: fail,
+        unknownCount: unknown,
+        evidence:
+          `You claimed a file deliverable ("${artifact}") was produced/updated, but this turn made ` +
+          `ZERO tool calls — no writeFile, nothing. The file was not touched. Either actually write it ` +
+          `(writeFile) or tell the user honestly that it has not been written yet.`,
+      };
+    }
+    return null;
+  }
 
   // 1. Failure count ≥ success count + completion claim → high (strongest signal)
   if (fail > 0 && fail >= ok) {
@@ -706,6 +728,20 @@ const MEMORY_ANTI_PATTERNS: ReadonlyArray<RegExp> = [
   // Modal hedge
   /(?:可能|大概|应该|或许|也许|估计)[^。！？\n]{0,8}(?:记住|记得|记下)/,
 ];
+
+/**
+ * Find a concrete FILE-ARTIFACT path in a completion claim — a Windows or POSIX path ending in a
+ * document/file extension (md/txt/doc/xls/csv/json/pdf/html/zip…). Used by the zero-tools branch:
+ * "updated the document at <path>" with no tool calls is a fabricated deliverable, not chit-chat.
+ * Conservative: requires an explicit extension so prose mentions of directories don't trip it.
+ */
+const ARTIFACT_PATH_RE =
+  /(?:[A-Za-z]:\\|\.{0,2}\/)[^\s"'`,;()[\]{}]{2,200}\.(?:md|txt|docx?|xlsx?|csv|json|ya?ml|pdf|html?|pptx?|zip|tar|gz|log)\b/i;
+
+export function findArtifactPathClaim(text: string): string | null {
+  const m = ARTIFACT_PATH_RE.exec(text);
+  return m ? m[0].slice(0, 160) : null;
+}
 
 /**
  * Find the first "completion claim" in text, suppress rhetorical questions / negations / quotation contexts,

@@ -5480,9 +5480,11 @@ async function runToolLoop(
             : lastPlan.status === 'draft'
               ? `plan_update_step({plan_id:"${lastPlan.id}", step_id, status:"doing"}) — 开始执行第一步`
               : `plan_revise({plan_id:"${lastPlan.id}", ...}) — 修订 plan 路径`;
-        const closeHint = lastPlan
-          ? `plan_close({plan_id:"${lastPlan.id}", outcome:"failure", summary:"分类错误"})`
-          : '(当前无活 plan,跳到第 2 步)';
+        const closeHint = !lastPlan
+          ? '(当前无活 plan,跳到第 2 步)'
+          : lastPlan.status === 'failed' || lastPlan.status === 'completed'
+            ? `(plan ${lastPlan.id} 已 close — **不要再调 plan_close(会报错)**,直接第 2 步 task_mode_classify(fast))`
+            : `plan_close({plan_id:"${lastPlan.id}", outcome:"failure", summary:"分类错误"})`;
         const reason =
           `[plan_protocol_gate] ${baseReason}\n` +
           `本工具 ${call.name} 已被机制层禁用,直到 plan 进入 executing 状态。\n\n` +
@@ -6690,9 +6692,11 @@ async function runToolLoop(
               : lastPlan.status === 'draft'
                 ? `plan_update_step({plan_id:"${lastPlan.id}", step_id, status:"doing"}) — start executing the first step`
                 : `plan_revise({plan_id:"${lastPlan.id}", ...}) — revise the plan path`;
-          const closeHint = lastPlan
-            ? `plan_close({plan_id:"${lastPlan.id}", outcome:"failure", summary:"misclassified task"})`
-            : '(no active plan — skip to step 2)';
+          const closeHint = !lastPlan
+            ? '(no active plan — skip to step 2)'
+            : lastPlan.status === 'failed' || lastPlan.status === 'completed'
+              ? `(plan ${lastPlan.id} is already closed — **do NOT call plan_close again (it will error)**; go straight to step 2 task_mode_classify(fast))`
+              : `plan_close({plan_id:"${lastPlan.id}", outcome:"failure", summary:"misclassified task"})`;
           const reason =
             `[plan_protocol_gate] ${baseReason}\n` +
             `Tool ${call.name} has been disabled by the mechanism layer until the plan reaches executing status.\n\n` +
