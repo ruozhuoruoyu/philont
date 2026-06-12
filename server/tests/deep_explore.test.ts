@@ -932,3 +932,23 @@ test('profiles carry no-progress caps: deliberate has more headroom than formal'
   assert.ok(DELIBERATE_PROFILE.noProgressCap >= 18);
   assert.ok(DELIBERATE_PROFILE.noProgressCap > FORMAL_PROFILE.noProgressCap);
 });
+
+test('withNoProgressStop injects an in-band commit nudge at half budget (mechanism, not prompt)', async () => {
+  const ev = async () => ({ ok: true, output: 'search results' });
+  const w = withNoProgressStop(ev, () => {}, { noProgressCap: 18 });
+  // Below the nudge threshold (9): clean output.
+  for (let i = 0; i < 8; i++) {
+    const r = await w.runner('webSearch', {});
+    assert.ok(!/MECHANISM WARNING/.test(r.output), `call ${i + 1} should not carry the nudge`);
+  }
+  // From call 9 (= floor(18/2)) every further evidence result carries the warning.
+  const r9 = await w.runner('webSearch', {});
+  assert.match(r9.output, /MECHANISM WARNING/);
+  assert.match(r9.output, /reason_record/);
+  const r10 = await w.runner('webFetch', {});
+  assert.match(r10.output, /MECHANISM WARNING/);
+  // A commit resets the counter → nudge disappears.
+  await w.runner('reason_record', {});
+  const after = await w.runner('webSearch', {});
+  assert.ok(!/MECHANISM WARNING/.test(after.output), 'nudge must reset after a tree commit');
+});

@@ -491,6 +491,11 @@ export function withNoProgressStop(
   // = only ~3 thinking steps — the gate killed a focused round one step before its settle (observed in
   // production). Callers pass a per-profile cap; the time-based stop below still guards true spinning.
   const cap = opts.noProgressCap ?? NO_PROGRESS_CAP;
+  // In-band commit nudge: prompt-level discipline ("settle after two batches") is ignored by weaker
+  // models (observed: 18 lookups, 9 iterations, zero commits on V4 Flash). Tool results are the one
+  // channel the model MUST read, so once half the budget is burned with no commit, every further
+  // result carries an explicit mechanism warning. Discipline in the mechanism, not the model.
+  const nudgeAt = Math.max(2, Math.floor(cap / 2));
   let callsSinceProgress = 0;
   let lastProgressTs = now(); // round start; reset on every tree commit
   const stalled = { value: false };
@@ -500,6 +505,11 @@ export function withNoProgressStop(
     if (r.ok && (name === 'reason_decompose' || name === 'reason_record')) {
       callsSinceProgress = 0;
       lastProgressTs = now();
+    } else if (r.ok && callsSinceProgress >= nudgeAt && callsSinceProgress < cap) {
+      r.output =
+        `${r.output}\n\n⚠ MECHANISM WARNING: ${callsSinceProgress} tool calls without a tree commit — ` +
+        `this round is cut as no-progress at ${cap}. STOP gathering and reason_record the node you are ` +
+        `working on NOW (conclusion + \`evidence\`; note any remaining uncertainty in \`result\`).`;
     }
     // Time-aware stop: a round that has not committed ANYTHING to the tree for too long is spinning
     // (e.g. all-pariGp, never decomposes). The call-count cap above misses this when iterations are
