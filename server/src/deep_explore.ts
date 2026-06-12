@@ -374,14 +374,22 @@ export function parseLiteratureCards(text: string, max = LIT_GROUNDING_MAX_CARDS
 const LIT_TYPE_LABEL: Record<LiteratureCard['type'], string> = {
   approach: 'approach', barrier: 'barrier', sota: 'SOTA', open: 'open', background: 'background',
 };
+/** Deliberation reading of the shared card types (the grounding meanings, not math). */
+export const DELIBERATE_LIT_TYPE_LABEL: Record<LiteratureCard['type'], string> = {
+  approach: 'factor', barrier: 'tradeoff', sota: 'reference', open: 'uncertain', background: 'pitfall',
+};
 const LIT_TYPE_ORDER: LiteratureCard['type'][] = ['barrier', 'sota', 'approach', 'open', 'background'];
 
-/** Render literature cards as a header + bullet list (barriers/SOTA first). Empty array → []. Shared by prompt + user milestone. */
-export function renderLiteratureCards(cards: LiteratureCard[]): string[] {
+/** Render literature cards as a header + bullet list (tradeoffs/references first). Empty array → []. Shared by prompt + user milestone. */
+export function renderLiteratureCards(
+  cards: LiteratureCard[],
+  labels: Record<LiteratureCard['type'], string> = LIT_TYPE_LABEL,
+  header = '## Known from the literature (retrieved this session, cited)',
+): string[] {
   if (cards.length === 0) return [];
   const sorted = [...cards].sort((a, b) => LIT_TYPE_ORDER.indexOf(a.type) - LIT_TYPE_ORDER.indexOf(b.type));
-  const lines = ['## Known from the literature (retrieved this session, cited)'];
-  for (const c of sorted) lines.push(`- [${LIT_TYPE_LABEL[c.type]}] ${c.claim}${c.source ? ` (${c.source})` : ''}`);
+  const lines = [header];
+  for (const c of sorted) lines.push(`- [${labels[c.type]}] ${c.claim}${c.source ? ` (${c.source})` : ''}`);
   return lines;
 }
 
@@ -433,14 +441,18 @@ export function buildDeliberateGroundingPrompt(goal: string, assumptions: string
 }
 
 const sessionLiterature = new Map<string, LiteratureCard[]>();
-/** Prompt lines injecting this session's retrieved literature as established context (empty if none). */
-function renderSessionLiterature(sessionId: string): string[] {
+/** Prompt lines injecting this session's retrieved grounding as established context (empty if none). Label set per mode. */
+function renderSessionLiterature(
+  sessionId: string,
+  labels: Record<LiteratureCard['type'], string> = LIT_TYPE_LABEL,
+  header = '## Known from the literature (retrieved this session, cited)',
+): string[] {
   const cards = sessionLiterature.get(sessionId);
   if (!cards || cards.length === 0) return [];
-  const lines = renderLiteratureCards(cards);
+  const lines = renderLiteratureCards(cards, labels, header);
   lines.push(
     'DIRECTIVE: treat these as established context — build ON them, do not re-derive what is already settled; ' +
-      'if a known barrier here blocks your plan, route around it (named circumvention) or reason_record the wall.',
+      'if a known tradeoff/barrier here blocks your plan, route around it or record the wall.',
   );
   return ['', ...lines];
 }
@@ -1167,7 +1179,7 @@ export function renderDeliberatePrompt(session: ReasoningSession, nodes: Reasoni
     for (const a of session.assumptions) lines.push(`- ${a}`);
   }
   for (const l of renderSessionBarriers(session.id)) lines.push(l);
-  for (const l of renderSessionLiterature(session.id)) lines.push(l);
+  for (const l of renderSessionLiterature(session.id, DELIBERATE_LIT_TYPE_LABEL, '## Known about this question going in (retrieved this session, cited)')) lines.push(l);
 
   const rawFrontier = computeFrontier(nodes);
   const frontier = VALUE_GUIDED ? rankFrontier(rawFrontier, nodes, UCB_C, NOVELTY_W) : rawFrontier;
@@ -2330,7 +2342,13 @@ export function createDeepExploreTool(
             `⛔ Feasibility check — this goal/method hits a KNOWN BARRIER:\n${renderBarrierAdvisory(applied)}`,
           );
         }
-        if (litCards.length) noteParts.push(renderLiteratureCards(litCards).join('\n'));
+        if (litCards.length) {
+          noteParts.push(
+            mode === 'deliberate'
+              ? renderLiteratureCards(litCards, DELIBERATE_LIT_TYPE_LABEL, '## Known about this question going in (cited)').join('\n')
+              : renderLiteratureCards(litCards).join('\n'),
+          );
+        }
         if (noteParts.length) {
           deps.onMilestone?.(
             `📚 Grounding for "${goal.slice(0, 60)}${goal.length > 60 ? '…' : ''}":\n\n${noteParts.join('\n\n')}` +

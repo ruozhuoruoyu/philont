@@ -45,6 +45,7 @@ import {
   renderDeliberatePrompt,
   buildDeliberateSkepticPrompt,
   buildDeliberateGroundingPrompt,
+  DELIBERATE_LIT_TYPE_LABEL,
 } from '../src/deep_explore.js';
 
 function node(over: Partial<ReasoningNode>): ReasoningNode {
@@ -896,4 +897,19 @@ test('grounding prompt is profile-aware: formal=literature/no-go, deliberate=fac
   assert.match(d, /PITFALLS/);
   assert.ok(!/parity problem|proof|lemma/i.test(d), 'deliberate grounding must not be math-flavored');
   assert.match(d, /ONLY a JSON array/);
+});
+
+test('literature card labels are mode-aware: deliberate renders factor/tradeoff/reference', () => {
+  const cards: LiteratureCard[] = [
+    { claim: 'pricing differs 10x', type: 'sota', source: 's1' },
+    { claim: 'cannot have cheapest + smartest + most stable at once', type: 'barrier', source: 's2' },
+  ];
+  const formal = renderLiteratureCards(cards).join('\n');
+  assert.match(formal, /\[SOTA\]/);
+  assert.match(formal, /\[barrier\]/);
+  const delib = renderLiteratureCards(cards, DELIBERATE_LIT_TYPE_LABEL, '## Known about this question going in (cited)').join('\n');
+  assert.match(delib, /\[reference\]/);
+  assert.match(delib, /\[tradeoff\]/);
+  assert.match(delib, /Known about this question/);
+  assert.ok(!/\[SOTA\]/.test(delib));
 });
