@@ -172,8 +172,12 @@ export class AgentApp extends LitElement {
   }
 
   static styles = css`
-    :host { display: block; min-height: 100vh; background: #fafafa; }
-    .app { display: flex; flex-direction: column; min-height: 100vh; }
+    /* Fixed viewport height (not min-height): the app must NOT grow with
+       content, otherwise <main> never constrains its children, agent-chat's
+       height:100% resolves to auto, .messages never overflows and the page
+       body becomes the scroller — breaking chat auto-scroll entirely. */
+    :host { display: block; height: 100vh; background: #fafafa; }
+    .app { display: flex; flex-direction: column; height: 100%; }
     .topbar {
       display: flex; align-items: center; gap: 16px;
       padding: 12px 24px; background: white; border-bottom: 1px solid #e5e5e5;
@@ -210,6 +214,8 @@ export class AgentApp extends LitElement {
     .estop:disabled { opacity: 0.6; cursor: not-allowed; }
     .estop.engaged { background: #d97706; border-color: #d97706; }
     .estop.engaged:hover:not(:disabled) { background: #b45309; }
-    main { flex: 1; }
+    /* min-height:0 lets the flex child shrink below its content height;
+       overflow:auto keeps non-chat views (memory/settings) scrollable. */
+    main { flex: 1; min-height: 0; overflow: auto; }
   `;
 }
