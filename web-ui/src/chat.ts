@@ -229,6 +229,7 @@ export class AgentChat extends LitElement {
     this.ws.send(JSON.stringify({ type: 'chat.send', content: text }));
     this.input = '';
     this.sending = true; // turn 开始 → "发送"变"停止",直到 final 到达
+    this.autoScroll = true; // sending your own message always snaps back to bottom
   }
 
   /** 中途停止当前 turn(UserHardStop):发 chat.stop,server 端 abort 正在跑的 turn。 */
@@ -416,7 +417,9 @@ export class AgentChat extends LitElement {
       flex: 1;
       overflow-y: auto;
       padding: 16px;
-      scroll-behavior: smooth;
+      /* No scroll-behavior:smooth here: animating programmatic scrolls fires
+         intermediate scroll events that onMessagesScroll mistakes for the user
+         scrolling up, which permanently disables autoScroll while streaming. */
     }
 
     .message {
