@@ -482,10 +482,15 @@ const NO_PROGRESS_CAP = (() => {
 export function withNoProgressStop(
   base: (name: string, input: Record<string, unknown>) => Promise<MiniLoopToolRunResult>,
   abort: () => void,
-  opts: { noProgressTimeoutMs?: number; now?: () => number } = {},
+  opts: { noProgressTimeoutMs?: number; noProgressCap?: number; now?: () => number } = {},
 ): { runner: (name: string, input: Record<string, unknown>) => Promise<MiniLoopToolRunResult>; stalled: { value: boolean } } {
   const now = opts.now ?? Date.now;
   const timeoutMs = opts.noProgressTimeoutMs;
+  // Call-count cap before a stop. The default suits FORMAL rounds (mostly single tool calls per LLM
+  // iteration). DELIBERATE evidence-gathering batches 3-4 parallel lookups per iteration, so 10 calls
+  // = only ~3 thinking steps — the gate killed a focused round one step before its settle (observed in
+  // production). Callers pass a per-profile cap; the time-based stop below still guards true spinning.
+  const cap = opts.noProgressCap ?? NO_PROGRESS_CAP;
   let callsSinceProgress = 0;
   let lastProgressTs = now(); // round start; reset on every tree commit
   const stalled = { value: false };
@@ -502,7 +507,7 @@ export function withNoProgressStop(
     // too much time has elapsed with no commit. `callsSinceProgress >= 2` avoids killing on one slow step.
     const stalledByTime =
       timeoutMs != null && callsSinceProgress >= 2 && now() - lastProgressTs > timeoutMs;
-    if ((callsSinceProgress >= NO_PROGRESS_CAP || stalledByTime) && !stalled.value) {
+    if ((callsSinceProgress >= cap || stalledByTime) && !stalled.value) {
       stalled.value = true;
       console.warn(
         `[deep-explore] no-progress early stop: ${callsSinceProgress} calls / ` +
@@ -1232,7 +1237,7 @@ export function renderDeliberatePrompt(session: ReasoningSession, nodes: Reasoni
   lines.push('');
   lines.push('## How to deliberate (discipline)');
   lines.push('1. **Decompose first.** Round 1 must split the question into 2–5 concrete, answerable sub-questions — do NOT browse before there is a tree.');
-  lines.push('2. **Work ONE sub-question at a time, and SETTLE it before touching another.** Pick the most important open one, gather evidence for it (the user’s own data first, then the web — 2–4 focused lookups is usually enough), then IMMEDIATELY reason_record it with the conclusion + `evidence`. Broad-crawling across many sub-questions without committing any is the failure mode that gets the round cut for no progress — searches you never commit to the tree are LOST.');
+  lines.push('2. **Work ONE sub-question at a time, and SETTLE it before touching another.** Pick the most important open one, gather evidence for it (the user’s own data first, then the web — 2–4 focused lookups is usually enough), then IMMEDIATELY reason_record it with the conclusion + `evidence`. **After at most TWO batches of lookups on a sub-question, SETTLE it with what you have** — a cited conclusion that names its remaining uncertainty in `result` beats yet another fetch round. Broad-crawling without committing is the failure mode that gets the round cut for no progress — searches you never commit to the tree are LOST.');
   lines.push('3. **A sub-question is SETTLED only when its conclusion is backed by cited evidence — attach it via `evidence`.** Actively seek DISCONFIRMING evidence, not just support; record an option/hypothesis as refuted when the evidence is against it (cite the source).');
   lines.push('4. Do not let an assertion masquerade as a finding. If you cannot find evidence, say so and leave the sub-question open — an honest "unresolved" beats a fabricated conclusion.');
   lines.push('5. **Only use real node ids** from the tree / returned by decompose; never invent ids.');
@@ -1333,6 +1338,8 @@ export interface ReasoningProfile {
   toolAllow: ReadonlySet<string>;
   /** Verb used for a settled node in user/LLM messages ('proved' | 'settled'). */
   settledVerb: string;
+  /** No-progress call cap for withNoProgressStop (deliberate batches parallel lookups → needs more headroom). */
+  noProgressCap: number;
   buildRoundPrompt(session: ReasoningSession, nodes: ReasoningNode[], lessons: string[]): string;
   buildUserMessage(session: ReasoningSession, isFresh: boolean): string;
   /** One-shot start-of-session grounding pass prompt (formal: literature/SOTA/no-go; deliberate: factors/tradeoffs/pitfalls). */
@@ -1352,6 +1359,7 @@ export const FORMAL_PROFILE: ReasoningProfile = {
   id: 'formal',
   toolAllow: DEEP_EXPLORE_RESEARCH_ALLOW,
   settledVerb: 'proved',
+  noProgressCap: NO_PROGRESS_CAP,
   buildRoundPrompt: (session, nodes, lessons) => renderTreePrompt(session, nodes, lessons),
   buildUserMessage: (session, isFresh) =>
     isFresh
@@ -1371,6 +1379,10 @@ export const DELIBERATE_PROFILE: ReasoningProfile = {
   id: 'deliberate',
   toolAllow: DELIBERATE_RESEARCH_ALLOW,
   settledVerb: 'settled',
+  // Evidence gathering batches 3-4 parallel lookups per LLM iteration; 10 calls = ~3 thinking steps,
+  // which killed a focused round one step before its settle. ~5-6 batched iterations of headroom; the
+  // time-based stop (half the round budget) still cuts true spinning.
+  noProgressCap: Math.max(18, NO_PROGRESS_CAP),
   buildRoundPrompt: (session, nodes, lessons) => renderDeliberatePrompt(session, nodes, lessons),
   buildUserMessage: (session, isFresh) =>
     isFresh
@@ -2112,7 +2124,7 @@ export function createDeepExploreTool(
       ),
       () => ctrl.abort(),
       // Stop a round that has made NO tree commit for half the round budget (the slow all-pariGp spin).
-      { noProgressTimeoutMs: Math.round(roundDeadlineMs * 0.5) },
+      { noProgressTimeoutMs: Math.round(roundDeadlineMs * 0.5), noProgressCap: profile.noProgressCap },
     );
     let result;
     try {
@@ -2231,7 +2243,7 @@ export function createDeepExploreTool(
       ),
       () => ctrl.abort(),
       // Stop a round that has made NO tree commit for half the round budget (the slow all-pariGp spin).
-      { noProgressTimeoutMs: Math.round(roundDeadlineMs * 0.5) },
+      { noProgressTimeoutMs: Math.round(roundDeadlineMs * 0.5), noProgressCap: profile.noProgressCap },
     );
     let result;
     try {

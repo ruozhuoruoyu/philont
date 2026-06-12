@@ -913,3 +913,22 @@ test('literature card labels are mode-aware: deliberate renders factor/tradeoff/
   assert.match(delib, /Known about this question/);
   assert.ok(!/\[SOTA\]/.test(delib));
 });
+
+test('withNoProgressStop honors a custom noProgressCap (deliberate parallel-batch headroom)', async () => {
+  // cap=18: 17 evidence calls without a commit must NOT stop the round; the 18th does.
+  let aborts = 0;
+  const ev = async () => ({ ok: true, output: 'results...' });
+  const w = withNoProgressStop(ev, () => { aborts++; }, { noProgressCap: 18 });
+  for (let i = 0; i < 17; i++) {
+    await w.runner('webSearch', {});
+    assert.equal(w.stalled.value, false, `call ${i + 1} must not trip cap=18`);
+  }
+  await w.runner('webSearch', {});
+  assert.equal(w.stalled.value, true);
+  assert.equal(aborts, 1);
+});
+
+test('profiles carry no-progress caps: deliberate has more headroom than formal', () => {
+  assert.ok(DELIBERATE_PROFILE.noProgressCap >= 18);
+  assert.ok(DELIBERATE_PROFILE.noProgressCap > FORMAL_PROFILE.noProgressCap);
+});
