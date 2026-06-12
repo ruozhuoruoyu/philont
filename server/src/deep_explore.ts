@@ -292,6 +292,8 @@ export function roundWasSubstantive(
  */
 const BARRIERS_ENABLED = process.env.PHILONT_DEEP_EXPLORE_BARRIERS !== '0';
 const sessionBarriers = new Map<string, BarrierMatch[]>();
+/** Sessions whose applicable-barrier ⛔ has already been shown to the user this process (start or first resume). */
+const sessionBarrierWarned = new Set<string>();
 function ensureBarriers(session: ReasoningSession): BarrierMatch[] {
   if (!BARRIERS_ENABLED) return [];
   const cached = sessionBarriers.get(session.id);
@@ -2335,6 +2337,7 @@ export function createDeepExploreTool(
         // Feasibility gate: if this goal/method hits a KNOWN BARRIER, name it ONCE up front (before any
         // round burns time) — the parity-problem tooth. Advisory; exploration still proceeds.
         const applied = ensureBarriers(session).filter((m) => m.severity === 'applies');
+        sessionBarrierWarned.add(session.id); // start shows (or has no) ⛔ — don't repeat it on the first continue
         // Combined grounding milestone: feasibility barriers (curated) + what the literature pass found.
         const noteParts: string[] = [];
         if (applied.length) {
@@ -2367,6 +2370,17 @@ export function createDeepExploreTool(
             error: 'No in-progress deep-exploreing session. Start one with action=start first.',
           };
         }
+        // Feasibility gate on RESUME: a session started before the barrier library existed (or in
+        // another process) never showed its ⛔ to the user — the start-only milestone misses it. Warn
+        // once per process per session, so continuing a doomed old session names the wall too.
+        const appliedOnResume = ensureBarriers(session).filter((m) => m.severity === 'applies');
+        if (appliedOnResume.length && !sessionBarrierWarned.has(session.id)) {
+          sessionBarrierWarned.add(session.id);
+          deps.onMilestone?.(
+            `⛔ Feasibility note for this session's goal:\n${renderBarrierAdvisory(appliedOnResume)}\n\n` +
+              `Advisory — continuing anyway, but the barrier above is the structural obstruction.`,
+          );
+        }
         return runRound(session);
       }
 
@@ -2387,6 +2401,18 @@ export function createDeepExploreTool(
             ? params.assumptions.filter((a): a is string => typeof a === 'string' && a.trim().length > 0)
             : [];
           session = reasoning.createSession({ goal, assumptions, ownerSessionId: owner }).session;
+        }
+        // Discover is the experimental-MATH loop (pariGp-driven conjecture generation) — running it
+        // against a deliberate session would aim a math prompt at a decision/judgment question.
+        if (session.mode === 'deliberate') {
+          return {
+            success: false,
+            output: '',
+            error:
+              'action=discover is the experimental-math mode and only applies to formal sessions. ' +
+              'This session is deliberate (evidence-based judgment) — use action=continue to keep ' +
+              'investigating sub-questions, or decompose candidate options/hypotheses there instead.',
+          };
         }
         return runDiscoverRound(session, seed);
       }
