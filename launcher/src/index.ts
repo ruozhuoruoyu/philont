@@ -164,6 +164,7 @@ async function handleLauncherApi(req: IncomingMessage, res: ServerResponse, path
 
   // ── WeChat scan-login (drives the web-ui QR panel) ───────────
   if (req.method === 'POST' && path === '/api/launcher/wechat/login') {
+    console.log('[launcher] POST /api/launcher/wechat/login — starting scan-login');
     sendJson(res, 200, wechatLogin.start());
     return true;
   }

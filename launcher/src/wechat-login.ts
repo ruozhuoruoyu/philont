@@ -59,6 +59,7 @@ export class WeChatLoginSession {
 
     this.buf = '';
     this.state = { phase: 'starting', startedAt: Date.now() };
+    console.log(`[wechat-login] spawn: ${cmd} ${args.join(' ')} (cwd=${serverDir})`);
 
     let child: ChildProcess;
     try {
@@ -69,20 +70,26 @@ export class WeChatLoginSession {
         detached: process.platform !== 'win32',
       });
     } catch (e) {
+      console.warn(`[wechat-login] spawn failed: ${String(e)}`);
       this.state = { phase: 'error', error: `spawn failed: ${String(e)}` };
       return this.state;
     }
     this.child = child;
 
     child.stdout?.on('data', (b: Buffer) => this.ingest(b.toString('utf8')));
-    child.stderr?.on('data', () => { /* human banner is suppressed in --json; ignore noise */ });
+    // CLI writes JSON to stdout; diagnostics (QR url, image-fetch outcome) go to stderr — surface them.
+    child.stderr?.on('data', (b: Buffer) => {
+      for (const l of b.toString('utf8').split('\n')) { if (l.trim()) console.warn(`[wechat-login:cli] ${l.trim()}`); }
+    });
 
     child.on('error', (err) => {
+      console.warn(`[wechat-login] child error: ${String(err?.message ?? err)}`);
       this.state = { ...this.state, phase: 'error', error: String(err?.message ?? err) };
     });
 
     child.on('exit', (code) => {
       this.child = undefined;
+      console.log(`[wechat-login] child exited (code ${code ?? 'null'}), final phase=${this.state.phase}`);
       // A clean confirm already set phase=confirmed; a reported error set phase=error.
       // Any other exit (non-zero, or zero without a confirmed event) is a failure.
       if (this.state.phase !== 'confirmed' && this.state.phase !== 'error') {
@@ -123,6 +130,12 @@ export class WeChatLoginSession {
       if (!line) continue;
       let evt: Record<string, unknown>;
       try { evt = JSON.parse(line); } catch { continue; } // ignore non-JSON noise
+      // Log event arrival without dumping the (large) inlined image.
+      const note = evt.type === 'qr'
+        ? `url=${evt.url ? 'yes' : 'no'} dataUri=${evt.dataUri ? `${String(evt.dataUri).length}ch` : 'no'} attempt=${evt.attempt ?? '?'}`
+        : evt.type === 'status' ? `phase=${evt.phase}`
+        : evt.type === 'error' ? `${evt.reason ?? ''} ${evt.detail ?? ''}` : '';
+      console.log(`[wechat-login] event: ${evt.type} ${note}`);
       this.apply(evt);
     }
   }

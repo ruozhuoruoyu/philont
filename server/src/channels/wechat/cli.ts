@@ -62,16 +62,19 @@ async function cmdLogin(json = false): Promise<void> {
   // that can't reach the weixin CDN, while this process (which just fetched the QR URL) can.
   // Inlining means the browser never has to load the CDN image itself; the url stays as a
   // fallback if the fetch fails.
+  const diag = (msg: string): void => { process.stderr.write(`${msg}\n`); }; // stderr: doesn't corrupt JSONL stdout
   const emitQr = (qrcodeUrl: string, qrcodeToken: string, attempt: number): void => {
     emit({ type: 'qr', url: qrcodeUrl, token: qrcodeToken, attempt });
+    diag(`[qr] attempt=${attempt} url=${qrcodeUrl}`);
     void (async () => {
       try {
         const res = await fetch(qrcodeUrl);
-        if (!res.ok) return;
+        if (!res.ok) { diag(`[qr] image fetch HTTP ${res.status}`); return; }
         const ct = res.headers.get('content-type') || 'image/png';
         const b64 = Buffer.from(await res.arrayBuffer()).toString('base64');
         emit({ type: 'qr', token: qrcodeToken, attempt, dataUri: `data:${ct};base64,${b64}` });
-      } catch { /* keep the url fallback */ }
+        diag(`[qr] inlined ${b64.length} b64 chars (ct=${ct})`);
+      } catch (e) { diag(`[qr] image fetch failed: ${String(e)}`); }
     })();
   };
 
