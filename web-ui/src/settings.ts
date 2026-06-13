@@ -53,6 +53,28 @@ const boolOn = (v: Values, key: string): boolean => {
   return x === '1' || (x || '').toLowerCase() === 'true';
 };
 
+/** Browser-detected local IANA zone (e.g. "Asia/Shanghai"); '' if undetectable. */
+const detectTz = (): string => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
+};
+
+/** Full IANA zone list for the datalist; cached. Empty on very old browsers (then free-text only). */
+let TZ_CACHE: string[] | null = null;
+const tzOptions = (): string[] => {
+  if (TZ_CACHE) return TZ_CACHE;
+  let list: string[] = [];
+  try {
+    const supported = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf;
+    if (typeof supported === 'function') list = supported('timeZone');
+  } catch { /* unsupported — leave empty, input stays free-text */ }
+  TZ_CACHE = list;
+  return list;
+};
+
 // 功能区 id → 显示名(双语)。
 const GROUP_LABELS: Record<string, Msg> = {
   启动配置: { zh: '启动配置', en: 'Startup' },
@@ -129,7 +151,7 @@ const FIELDS: Field[] = [
     placeholder: 'http://127.0.0.1:7890',
     help: { zh: '开启后所有出网(模型 / 搜索 / 抓取 / 通道)都走它。无 NO_PROXY 白名单,国内网关也会走代理。', en: 'When on, ALL outbound traffic (model / search / fetch / channels) routes through it. No NO_PROXY allowlist.' } },
   { key: 'AGENT_TIMEZONE', label: { zh: '时区', en: 'Timezone' }, type: 'text', group: '网络与时区', placeholder: 'Asia/Shanghai',
-    help: { zh: '日历 / 定时任务用,IANA 时区名。默认跟随系统。', en: 'For calendar / scheduling. IANA name. Defaults to system.' } },
+    help: { zh: '日历 / 定时任务用。已按浏览器自动识别本地时区,可下拉搜索改选。', en: 'For calendar / scheduling. Auto-detected from your browser; type to search and override.' } },
 
   // ══ 通用 ══
   { key: 'PHILONT_DOWNLOAD_DIR', label: { zh: '下载目录', en: 'Download Dir' }, type: 'text', group: '通用',
@@ -269,6 +291,12 @@ export class SettingsView extends LitElement {
       const cfg = await cfgRes.json();
       const st = await stRes.json();
       this.values = { ...(cfg.values ?? {}) };
+      // Timezone: if unset, prefill the browser-detected IANA zone so "follow system"
+      // is real (backend otherwise falls back to UTC, not the OS zone).
+      if (!this.values.AGENT_TIMEZONE) {
+        const tz = detectTz();
+        if (tz) this.values = { ...this.values, AGENT_TIMEZONE: tz };
+      }
       this.proxyEnabled = !!(this.values.PHILONT_PROXY && this.values.PHILONT_PROXY.trim() !== '');
       this.agentState = st.state ?? 'unknown';
     } catch (e) {
@@ -416,8 +444,29 @@ export class SettingsView extends LitElement {
         </label>` : null}`;
   }
 
+  /** 时区特判:可搜索的 IANA 下拉(datalist),值始终是合法 IANA 串;附「用本地」复位。 */
+  private renderTimezone(f: Field) {
+    const v = this.values[f.key] ?? '';
+    const opts = tzOptions();
+    const local = detectTz();
+    return html`
+      <label class="row">
+        <span class="lbl">${tr(f.label)}</span>
+        <input type="text" list="tz-options" .value=${v} placeholder=${tr(f.placeholder)}
+          autocomplete="off"
+          @input=${(e: Event) => this.setVal(f.key, (e.target as HTMLInputElement).value)} />
+        ${opts.length ? html`<datalist id="tz-options">${opts.map((z) => html`<option value=${z}></option>`)}</datalist>` : null}
+        <span class="help">
+          ${tr(f.help)}
+          ${local && v !== local ? html`<button type="button" class="link-btn"
+            @click=${() => this.setVal(f.key, local)}>${t(`用本地 (${local})`, `Use local (${local})`)}</button>` : null}
+        </span>
+      </label>`;
+  }
+
   private renderField(f: Field) {
     if (f.key === 'PHILONT_PROXY') return this.renderProxy(f);
+    if (f.key === 'AGENT_TIMEZONE') return this.renderTimezone(f);
     const v = this.values[f.key] ?? '';
     const ph = tr(f.placeholder);
     if (f.type === 'bool') {
@@ -581,6 +630,7 @@ export class SettingsView extends LitElement {
     .row input:focus, .row select:focus { border-color: #1976d2; }
     .row input[type=checkbox] { width: 18px; height: 18px; }
     .help { grid-column: 2 / -1; font-size: 12px; color: #9ca3af; }
+    .link-btn { margin-left: 6px; padding: 0; border: none; background: none; color: #1976d2; font-size: 12px; cursor: pointer; text-decoration: underline; }
     .toggle-row .help { grid-column: 3; }
     .banner { margin: 14px 0; padding: 10px 14px; border-radius: 8px; font-size: 14px; }
     .banner.err { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
