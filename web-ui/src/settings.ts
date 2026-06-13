@@ -31,6 +31,7 @@ type Values = Record<string, string>;
 interface WxLogin {
   phase: 'idle' | 'starting' | 'waiting' | 'scanned' | 'confirmed' | 'expired' | 'error';
   qrcodeUrl?: string;
+  qrcodeDataUri?: string; // 服务端抓取并内联的二维码图,优先用它,浏览器不必直连 weixin
   attempt?: number;
   accountId?: string;
   error?: string;
@@ -71,7 +72,17 @@ const detectTz = (): string => {
   }
 };
 
-/** Full IANA zone list for the datalist; cached. Empty on very old browsers (then free-text only). */
+// Fallback zone list for browsers without Intl.supportedValuesOf (so the dropdown is never empty).
+const TZ_FALLBACK = [
+  'UTC',
+  'Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Taipei', 'Asia/Tokyo', 'Asia/Seoul',
+  'Asia/Singapore', 'Asia/Kolkata', 'Asia/Dubai', 'Asia/Bangkok', 'Asia/Jakarta',
+  'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Moscow',
+  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+  'America/Sao_Paulo', 'Australia/Sydney', 'Pacific/Auckland',
+];
+
+/** Full IANA zone list for the dropdown; cached. Falls back to a curated list on old browsers. */
 let TZ_CACHE: string[] | null = null;
 const tzOptions = (): string[] => {
   if (TZ_CACHE) return TZ_CACHE;
@@ -79,9 +90,9 @@ const tzOptions = (): string[] => {
   try {
     const supported = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf;
     if (typeof supported === 'function') list = supported('timeZone');
-  } catch { /* unsupported — leave empty, input stays free-text */ }
-  TZ_CACHE = list;
-  return list;
+  } catch { /* unsupported below */ }
+  TZ_CACHE = list.length ? list : TZ_FALLBACK;
+  return TZ_CACHE;
 };
 
 // 功能区 id → 显示名(双语)。
@@ -504,23 +515,21 @@ export class SettingsView extends LitElement {
         </label>` : null}`;
   }
 
-  /** 时区特判:可搜索的 IANA 下拉(datalist),值始终是合法 IANA 串;附「用本地」复位。 */
+  /** 时区特判:真·下拉框,选项为全量 IANA 时区;默认跟随浏览器探测到的本地时区。 */
   private renderTimezone(f: Field) {
     const v = this.values[f.key] ?? '';
-    const opts = tzOptions();
     const local = detectTz();
+    const zones = tzOptions();
+    // 保证当前值(可能是手填的少见时区)和本地时区都在可选项里。
+    const all = [...new Set([...(v ? [v] : []), ...(local ? [local] : []), ...zones])];
     return html`
       <label class="row">
         <span class="lbl">${tr(f.label)}</span>
-        <input type="text" list="tz-options" .value=${v} placeholder=${tr(f.placeholder)}
-          autocomplete="off"
-          @input=${(e: Event) => this.setVal(f.key, (e.target as HTMLInputElement).value)} />
-        ${opts.length ? html`<datalist id="tz-options">${opts.map((z) => html`<option value=${z}></option>`)}</datalist>` : null}
-        <span class="help">
-          ${tr(f.help)}
-          ${local && v !== local ? html`<button type="button" class="link-btn"
-            @click=${() => this.setVal(f.key, local)}>${t(`用本地 (${local})`, `Use local (${local})`)}</button>` : null}
-        </span>
+        <select .value=${v} @change=${(e: Event) => this.setVal(f.key, (e.target as HTMLSelectElement).value)}>
+          ${v ? null : html`<option value="" disabled selected>${t('选择时区…', 'Select timezone…')}</option>`}
+          ${all.map((z) => html`<option value=${z} ?selected=${z === v}>${z}${z === local ? t(' (本地)', ' (local)') : ''}</option>`)}
+        </select>
+        ${f.help ? html`<span class="help">${tr(f.help)}</span>` : null}
       </label>`;
   }
 
@@ -551,15 +560,15 @@ export class SettingsView extends LitElement {
           <span class="help">${t('在浏览器里扫码,免去命令行 npm run wechat:login。', 'Scan in the browser — no command-line npm run wechat:login.')}</span>
         ` : null}
         ${phase === 'starting' ? html`<p class="muted">${t('正在获取二维码…', 'Fetching QR code…')}</p>` : null}
-        ${phase === 'waiting' && wx?.qrcodeUrl ? html`
+        ${phase === 'waiting' && (wx?.qrcodeDataUri || wx?.qrcodeUrl) ? html`
           <div class="wx-qr">
-            <!-- referrerpolicy=no-referrer: weixin CDN hotlink-protects QR images; without it the
-                 embedded <img> sends our page Referer and the CDN 403s (shows only alt text). -->
-            <img src=${this.wxQrSrc(wx.qrcodeUrl)} alt=${t('微信二维码', 'WeChat QR')}
+            <!-- Prefer the server-inlined data URI (browser may not reach the weixin CDN). The
+                 raw url is a fallback; referrerpolicy=no-referrer dodges the CDN's hotlink 403. -->
+            <img src=${wx.qrcodeDataUri ?? this.wxQrSrc(wx.qrcodeUrl as string)} alt=${t('微信二维码', 'WeChat QR')}
               width="200" height="200" referrerpolicy="no-referrer" />
             <p class="muted">${t('用微信扫描上方二维码', 'Scan the QR above with WeChat')}${wx.attempt && wx.attempt > 1 ? ` (#${wx.attempt})` : ''}</p>
-            ${/^https?:/i.test(wx.qrcodeUrl) ? html`<a class="wx-link" href=${wx.qrcodeUrl}
-              target="_blank" rel="noreferrer">${t('图加载不出?点此在新标签打开二维码', 'QR not loading? Open it in a new tab')}</a>` : null}
+            ${!wx.qrcodeDataUri && wx.qrcodeUrl && /^https?:/i.test(wx.qrcodeUrl) ? html`<a class="wx-link"
+              href=${wx.qrcodeUrl} target="_blank" rel="noreferrer">${t('图加载不出?点此在新标签打开二维码', 'QR not loading? Open it in a new tab')}</a>` : null}
             <button type="button" class="mini" @click=${() => this.wxCancel()}>${t('取消', 'Cancel')}</button>
           </div>` : null}
         ${phase === 'scanned' ? html`

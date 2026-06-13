@@ -57,6 +57,24 @@ async function cmdLogin(json = false): Promise<void> {
   // In --json mode, every line on stdout is one JSON event the launcher parses.
   const emit = (o: unknown): void => { process.stdout.write(`${JSON.stringify(o)}\n`); };
 
+  // Emit the QR, then (best-effort) fetch the image server-side and emit it inline as a
+  // data URI. The browser viewing the web-ui may be a different device / behind a network
+  // that can't reach the weixin CDN, while this process (which just fetched the QR URL) can.
+  // Inlining means the browser never has to load the CDN image itself; the url stays as a
+  // fallback if the fetch fails.
+  const emitQr = (qrcodeUrl: string, qrcodeToken: string, attempt: number): void => {
+    emit({ type: 'qr', url: qrcodeUrl, token: qrcodeToken, attempt });
+    void (async () => {
+      try {
+        const res = await fetch(qrcodeUrl);
+        if (!res.ok) return;
+        const ct = res.headers.get('content-type') || 'image/png';
+        const b64 = Buffer.from(await res.arrayBuffer()).toString('base64');
+        emit({ type: 'qr', token: qrcodeToken, attempt, dataUri: `data:${ct};base64,${b64}` });
+      } catch { /* keep the url fallback */ }
+    })();
+  };
+
   // Allow env to override baseUrl (overseas / self-hosted deployments)
   const baseUrl = process.env.WECHAT_BASE_URL || DEFAULT_BASE_URL;
   const accountIdOverride = process.env.WECHAT_ACCOUNT_ID;
@@ -74,7 +92,7 @@ async function cmdLogin(json = false): Promise<void> {
     baseUrl,
     accountIdOverride,
     render: json
-      ? ({ qrcodeUrl, qrcodeToken, attempt }) => emit({ type: 'qr', url: qrcodeUrl, token: qrcodeToken, attempt })
+      ? ({ qrcodeUrl, qrcodeToken, attempt }) => emitQr(qrcodeUrl, qrcodeToken, attempt)
       : undefined,
     onStatus: json ? (phase) => emit({ type: 'status', phase }) : undefined,
   });
