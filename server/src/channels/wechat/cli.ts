@@ -24,7 +24,10 @@ async function main() {
   const cmd = process.argv[2] ?? 'login';
   switch (cmd) {
     case 'login':
-      await cmdLogin();
+      // --json: emit machine-readable JSONL events (qr / status / confirmed / error)
+      // on stdout instead of the human banner. Used by the launcher to drive the
+      // web-ui scan-login panel.
+      await cmdLogin(process.argv.includes('--json'));
       break;
     case 'list':
       cmdList();
@@ -50,30 +53,43 @@ async function main() {
   }
 }
 
-async function cmdLogin(): Promise<void> {
+async function cmdLogin(json = false): Promise<void> {
+  // In --json mode, every line on stdout is one JSON event the launcher parses.
+  const emit = (o: unknown): void => { process.stdout.write(`${JSON.stringify(o)}\n`); };
+
   // Allow env to override baseUrl (overseas / self-hosted deployments)
   const baseUrl = process.env.WECHAT_BASE_URL || DEFAULT_BASE_URL;
   const accountIdOverride = process.env.WECHAT_ACCOUNT_ID;
   if (accountIdOverride && !isValidAccountId(accountIdOverride)) {
-    console.error(`Invalid accountId: ${accountIdOverride} (only [A-Za-z0-9_.-]{1,64} allowed)`);
+    if (json) emit({ type: 'error', reason: 'bad_account_id', detail: accountIdOverride });
+    else console.error(`Invalid accountId: ${accountIdOverride} (only [A-Za-z0-9_.-]{1,64} allowed)`);
     process.exit(2);
   }
 
-  console.log(`\n🔑 WeChat scan-QR login\n   base: ${baseUrl}\n`);
+  if (!json) console.log(`\n🔑 WeChat scan-QR login\n   base: ${baseUrl}\n`);
 
   const client = new ILinkClient({ baseUrl });
   const r = await loginWithQrCode({
     client,
     baseUrl,
     accountIdOverride,
+    render: json
+      ? ({ qrcodeUrl, qrcodeToken, attempt }) => emit({ type: 'qr', url: qrcodeUrl, token: qrcodeToken, attempt })
+      : undefined,
+    onStatus: json ? (phase) => emit({ type: 'status', phase }) : undefined,
   });
 
   if (!r.ok) {
-    console.error(`\n❌ Login failed: ${r.reason}${r.detail ? ` — ${r.detail}` : ''}`);
+    if (json) emit({ type: 'error', reason: r.reason, detail: r.detail });
+    else console.error(`\n❌ Login failed: ${r.reason}${r.detail ? ` — ${r.detail}` : ''}`);
     process.exit(1);
   }
 
   writeCredentials(r.credentials);
+  if (json) {
+    emit({ type: 'confirmed', accountId: r.credentials.accountId, baseUrl: r.credentials.baseUrl });
+    return;
+  }
   console.log(`\n✅ Login succeeded`);
   console.log(`   accountId : ${r.credentials.accountId}`);
   console.log(`   baseUrl   : ${r.credentials.baseUrl}`);

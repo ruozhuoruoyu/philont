@@ -34,6 +34,16 @@ export const QR_MAX_REFRESH = 3;
 /** UI injection: render the QR for the user (default: print the URL) */
 export type QrRenderer = (info: { qrcodeUrl: string; qrcodeToken: string; attempt: number }) => void;
 
+/**
+ * Intermediate login phases surfaced to a UI between QR render and the final result.
+ * The poll loop otherwise handles 'scaned' silently; this lets a front-end show
+ * "scanned, confirm on your phone" instead of staying on "waiting" until success.
+ */
+export type LoginPhase = 'waiting' | 'scanned' | 'redirect' | 'expired' | 'confirmed';
+
+/** UI injection: report a phase transition (fired only on change, not every poll). */
+export type StatusReporter = (phase: LoginPhase) => void;
+
 /** Sleep injection (for testing) */
 export type SleepFn = (ms: number) => Promise<void>;
 
@@ -58,6 +68,8 @@ export interface LoginOptions {
   baseUrl?: string;
   /** UI render callback */
   render?: QrRenderer;
+  /** UI phase-transition callback (waiting → scanned → confirmed, etc.) */
+  onStatus?: StatusReporter;
   /** Sleep injection */
   sleep?: SleepFn;
   /** Per-QR wait cap (ms) */
@@ -84,6 +96,15 @@ export async function loginWithQrCode(opts: LoginOptions = {}): Promise<LoginRes
   const sleep = opts.sleep ?? REAL_SLEEP;
   const qrTotalMs = opts.qrTotalTimeoutMs ?? QR_TOTAL_TIMEOUT_MS;
   const maxRefresh = opts.maxRefresh ?? QR_MAX_REFRESH;
+
+  // Fire onStatus only on phase change, so the UI isn't spammed once per poll.
+  let lastPhase: LoginPhase | '' = '';
+  const report = (p: LoginPhase): void => {
+    if (opts.onStatus && p !== lastPhase) {
+      lastPhase = p;
+      opts.onStatus(p);
+    }
+  };
 
   const startedAt = Date.now();
   let attempt = 0;
@@ -122,14 +143,20 @@ export async function loginWithQrCode(opts: LoginOptions = {}): Promise<LoginRes
 
       switch (status.status) {
         case 'wait':
+          report('waiting');
+          await sleep(QR_POLL_INTERVAL_MS);
+          continue;
+
         case 'scaned':
-          // Keep waiting
+          // Scanned on the phone; waiting for the user to tap confirm.
+          report('scanned');
           await sleep(QR_POLL_INTERVAL_MS);
           continue;
 
         case 'scaned_but_redirect': {
           // Switch host and rebuild client (rare, but hermes handles it this way)
           if (status.redirect_host) {
+            report('redirect');
             const newBase = normalizeBaseUrl(status.redirect_host);
             client = new ILinkClient({ baseUrl: newBase, fetch: opts.client ? undefined : undefined });
             await sleep(QR_POLL_INTERVAL_MS);
@@ -141,6 +168,7 @@ export async function loginWithQrCode(opts: LoginOptions = {}): Promise<LoginRes
 
         case 'expired':
           // Exit inner loop to refresh QR in outer loop
+          report('expired');
           break;
 
         case 'confirmed': {
@@ -160,6 +188,7 @@ export async function loginWithQrCode(opts: LoginOptions = {}): Promise<LoginRes
             cdnBaseUrl: DEFAULT_CDN_BASE_URL,
             createdAt: Date.now(),
           };
+          report('confirmed');
           return { ok: true, credentials: creds };
         }
 

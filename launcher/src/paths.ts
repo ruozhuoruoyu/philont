@@ -60,3 +60,22 @@ export function resolveAgentStartCommand(): { cmd: string; args: string[]; mode:
   const tsxBin = join(serverDir, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
   return { cmd: existsSync(tsxBin) ? tsxBin : 'tsx', args: [srcEntry], mode: 'dev' };
 }
+
+/**
+ * Command to run the WeChat scan-login CLI in --json mode (drives the web-ui panel).
+ * Same prod(dist)/dev(tsx) resolution as the agent; entry is the wechat cli, args end
+ * with `login --json`.
+ */
+export function resolveWeChatLoginCommand(): { cmd: string; args: string[] } {
+  const distEntry = join(serverDir, 'dist', 'channels', 'wechat', 'cli.js');
+  if (existsSync(distEntry)) {
+    return { cmd: process.execPath, args: [distEntry, 'login', '--json'] };
+  }
+  const srcEntry = join(serverDir, 'src', 'channels', 'wechat', 'cli.ts');
+  const tsxCli = join(serverDir, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  if (existsSync(tsxCli)) {
+    return { cmd: process.execPath, args: [tsxCli, srcEntry, 'login', '--json'] };
+  }
+  const tsxBin = join(serverDir, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
+  return { cmd: existsSync(tsxBin) ? tsxBin : 'tsx', args: [srcEntry, 'login', '--json'] };
+}

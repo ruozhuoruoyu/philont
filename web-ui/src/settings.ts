@@ -26,6 +26,15 @@ import { LangController, t, tr, type Msg } from './i18n.js';
 
 type FieldType = 'text' | 'secret' | 'bool' | 'select' | 'number';
 type Values = Record<string, string>;
+
+/** 微信扫码登录会话态(对应 launcher 的 LoginState)。 */
+interface WxLogin {
+  phase: 'idle' | 'starting' | 'waiting' | 'scanned' | 'confirmed' | 'expired' | 'error';
+  qrcodeUrl?: string;
+  attempt?: number;
+  accountId?: string;
+  error?: string;
+}
 interface Field {
   key: string;
   label: Msg;
@@ -210,7 +219,7 @@ const FIELDS: Field[] = [
     showIf: (v) => boolOn(v, 'TELEGRAM_ENABLED'), placeholder: '-1001234567890',
     help: { zh: 'allowlist 时填:允许的群组 id,逗号分隔。', en: 'For allowlist: allowed group ids, comma-separated.' } },
   { key: 'WECHAT_ENABLED', label: { zh: '启用 WeChat', en: 'Enable WeChat' }, type: 'bool', group: '通道',
-    help: { zh: '须先在命令行 npm run wechat:login 扫码。', en: 'First scan-login via `npm run wechat:login`.' } },
+    help: { zh: '开启微信通道。首次用下方「扫码登录微信」按钮扫码,登录成功会自动勾选此项。', en: 'Enable the WeChat channel. First time, use “Scan to log in WeChat” below; it auto-checks this on success.' } },
   { key: 'WECHAT_DM_POLICY', label: { zh: 'WeChat DM 策略', en: 'WeChat DM Policy' }, type: 'select', group: '通道', options: POLICY_OPTS,
     showIf: (v) => boolOn(v, 'WECHAT_ENABLED'), help: { zh: '私聊准入。默认 allowlist(白名单,安全)—— 留空也按白名单,不填下面的 id 会拦下所有私聊。', en: 'DM access. Defaults to allowlist (safe) — empty still means allowlist, so DMs are blocked until you add an id below.' } },
   { key: 'WECHAT_ALLOWED_USERS', label: { zh: 'DM 白名单', en: 'DM Allowlist' }, type: 'text', group: '通道',
@@ -275,10 +284,17 @@ export class SettingsView extends LitElement {
   @state() private caps: Record<string, { found: boolean; hint?: string; version?: string }> | null = null;
   @state() private autostart = false;
   @state() private proxyEnabled = false; // 全局代理开关(UI 态:由 PHILONT_PROXY 是否非空派生)
+  @state() private wx: WxLogin | null = null; // 微信扫码登录会话态(轮询 launcher 而来)
+  private wxTimer?: ReturnType<typeof setInterval>;
 
   connectedCallback(): void {
     super.connectedCallback();
     void this.load();
+  }
+
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.wxStopPolling();
   }
 
   private async load(): Promise<void> {
@@ -331,6 +347,50 @@ export class SettingsView extends LitElement {
 
   private setVal(key: string, v: string): void {
     this.values = { ...this.values, [key]: v };
+  }
+
+  // ── 微信扫码登录:POST 启动 → 轮询 status → confirmed 后自动开通道 ──
+  private async wxStart(): Promise<void> {
+    this.wx = { phase: 'starting' };
+    try {
+      const r = await fetch(`${LAUNCHER_BASE}/api/launcher/wechat/login`, { method: 'POST' });
+      this.wx = await r.json();
+    } catch (e) {
+      this.wx = { phase: 'error', error: String(e) };
+      return;
+    }
+    this.wxStartPolling();
+  }
+
+  private wxStartPolling(): void {
+    this.wxStopPolling();
+    this.wxTimer = setInterval(() => void this.wxPoll(), 1200);
+  }
+
+  private wxStopPolling(): void {
+    if (this.wxTimer) { clearInterval(this.wxTimer); this.wxTimer = undefined; }
+  }
+
+  private async wxPoll(): Promise<void> {
+    try {
+      const r = await fetch(`${LAUNCHER_BASE}/api/launcher/wechat/login/status`, { cache: 'no-store' });
+      const s = (await r.json()) as WxLogin;
+      this.wx = s;
+      if (s.phase === 'confirmed') {
+        this.wxStopPolling();
+        this.setVal('WECHAT_ENABLED', '1'); // 登录成功即默认开通道,用户仍需保存并重启
+        this.message = t('微信登录成功,点「保存并重启 agent」让通道生效。',
+          'WeChat login succeeded — click “Save & Restart agent” to bring the channel up.');
+      } else if (s.phase === 'error') {
+        this.wxStopPolling();
+      }
+    } catch { /* 瞬时失败:保持轮询 */ }
+  }
+
+  private async wxCancel(): Promise<void> {
+    this.wxStopPolling();
+    try { await fetch(`${LAUNCHER_BASE}/api/launcher/wechat/login/cancel`, { method: 'POST' }); } catch { /* 忽略 */ }
+    this.wx = null;
   }
 
   private isOn(f: Field): boolean {
@@ -464,19 +524,55 @@ export class SettingsView extends LitElement {
       </label>`;
   }
 
+  private renderBool(f: Field) {
+    return html`
+      <label class="row toggle-row">
+        <span class="lbl">${tr(f.label)}</span>
+        <input type="checkbox" .checked=${this.isOn(f)}
+          @change=${(e: Event) => this.setVal(f.key, (e.target as HTMLInputElement).checked ? '1' : '0')} />
+        ${f.help ? html`<span class="help">${tr(f.help)}</span>` : null}
+      </label>`;
+  }
+
+  /** 微信扫码登录面板:浏览器内显示二维码 + 实时状态,替代命令行 npm run wechat:login。 */
+  private renderWeChatLogin() {
+    const wx = this.wx;
+    const phase = wx?.phase;
+    const active = phase === 'starting' || phase === 'waiting' || phase === 'scanned';
+    return html`
+      <div class="wx-login">
+        ${!active && phase !== 'confirmed' ? html`
+          <button type="button" class="mini" @click=${() => this.wxStart()}>${t('扫码登录微信', 'Scan to log in WeChat')}</button>
+          <span class="help">${t('在浏览器里扫码,免去命令行 npm run wechat:login。', 'Scan in the browser — no command-line npm run wechat:login.')}</span>
+        ` : null}
+        ${phase === 'starting' ? html`<p class="muted">${t('正在获取二维码…', 'Fetching QR code…')}</p>` : null}
+        ${phase === 'waiting' && wx?.qrcodeUrl ? html`
+          <div class="wx-qr">
+            <img src=${wx.qrcodeUrl} alt="WeChat QR" width="200" height="200" />
+            <p class="muted">${t('用微信扫描上方二维码', 'Scan the QR above with WeChat')}${wx.attempt && wx.attempt > 1 ? ` (#${wx.attempt})` : ''}</p>
+            <button type="button" class="mini" @click=${() => this.wxCancel()}>${t('取消', 'Cancel')}</button>
+          </div>` : null}
+        ${phase === 'scanned' ? html`
+          <p class="muted">${t('已扫码 ✓ 请在手机上确认登录…', 'Scanned ✓ confirm the login on your phone…')}
+            <button type="button" class="mini" @click=${() => this.wxCancel()}>${t('取消', 'Cancel')}</button></p>` : null}
+        ${phase === 'confirmed' ? html`
+          <p class="wx-ok">${t('✅ 登录成功', '✅ Logged in')}${wx?.accountId ? ` · ${wx.accountId}` : ''} —
+            ${t('已自动开启微信通道,记得「保存并重启 agent」。', 'WeChat channel enabled — remember to Save & Restart agent.')}</p>` : null}
+        ${phase === 'error' ? html`
+          <p class="wx-err">${t('登录失败', 'Login failed')}: ${wx?.error ?? ''}
+            <button type="button" class="mini" @click=${() => this.wxStart()}>${t('重试', 'Retry')}</button></p>` : null}
+      </div>`;
+  }
+
   private renderField(f: Field) {
     if (f.key === 'PHILONT_PROXY') return this.renderProxy(f);
     if (f.key === 'AGENT_TIMEZONE') return this.renderTimezone(f);
     const v = this.values[f.key] ?? '';
     const ph = tr(f.placeholder);
     if (f.type === 'bool') {
-      return html`
-        <label class="row toggle-row">
-          <span class="lbl">${tr(f.label)}</span>
-          <input type="checkbox" .checked=${this.isOn(f)}
-            @change=${(e: Event) => this.setVal(f.key, (e.target as HTMLInputElement).checked ? '1' : '0')} />
-          ${f.help ? html`<span class="help">${tr(f.help)}</span>` : null}
-        </label>`;
+      // WeChat channel toggle carries an inline scan-login panel below it.
+      if (f.key === 'WECHAT_ENABLED') return html`${this.renderBool(f)}${this.renderWeChatLogin()}`;
+      return this.renderBool(f);
     }
     if (f.type === 'select') {
       return html`
@@ -631,6 +727,12 @@ export class SettingsView extends LitElement {
     .row input[type=checkbox] { width: 18px; height: 18px; }
     .help { grid-column: 2 / -1; font-size: 12px; color: #9ca3af; }
     .link-btn { margin-left: 6px; padding: 0; border: none; background: none; color: #1976d2; font-size: 12px; cursor: pointer; text-decoration: underline; }
+    .wx-login { margin: 6px 0 10px; padding: 10px 12px; background: #fafafa; border: 1px dashed #e5e7eb; border-radius: 8px; }
+    .wx-login .help { display: block; margin-top: 6px; }
+    .wx-qr { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+    .wx-qr img { border: 1px solid #e5e7eb; border-radius: 6px; background: #fff; }
+    .wx-ok { color: #15803d; font-size: 13px; margin: 4px 0; }
+    .wx-err { color: #b91c1c; font-size: 13px; margin: 4px 0; }
     .toggle-row .help { grid-column: 3; }
     .banner { margin: 14px 0; padding: 10px 14px; border-radius: 8px; font-size: 14px; }
     .banner.err { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }

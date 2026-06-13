@@ -28,9 +28,11 @@ import { openBrowser } from './open-browser.js';
 import { ensureDesktopShortcut } from './desktop-shortcut.js';
 import { detectCapabilities } from './capabilities.js';
 import { isAutostartEnabled, setAutostart } from './autostart.js';
+import { WeChatLoginSession } from './wechat-login.js';
 
 const LAUNCHER_PORT = Number(process.env.PHILONT_LAUNCHER_PORT) || 20267;
 const supervisor = new AgentSupervisor();
+const wechatLogin = new WeChatLoginSession();
 
 // ── helpers ────────────────────────────────────────────────────────────
 function sendJson(res: ServerResponse, status: number, data: unknown): void {
@@ -157,6 +159,20 @@ async function handleLauncherApi(req: IncomingMessage, res: ServerResponse, path
     const body = await readJsonBody(req);
     const r = setAutostart(body.enabled !== false);
     sendJson(res, r.ok ? 200 : 500, { enabled: isAutostartEnabled(), ...r });
+    return true;
+  }
+
+  // ── WeChat scan-login (drives the web-ui QR panel) ───────────
+  if (req.method === 'POST' && path === '/api/launcher/wechat/login') {
+    sendJson(res, 200, wechatLogin.start());
+    return true;
+  }
+  if (req.method === 'GET' && path === '/api/launcher/wechat/login/status') {
+    sendJson(res, 200, wechatLogin.getState());
+    return true;
+  }
+  if (req.method === 'POST' && path === '/api/launcher/wechat/login/cancel') {
+    sendJson(res, 200, wechatLogin.cancel());
     return true;
   }
 
