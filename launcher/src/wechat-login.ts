@@ -25,8 +25,7 @@ export type LoginPhase =
 
 export interface LoginState {
   phase: LoginPhase;
-  qrcodeUrl?: string;
-  qrcodeDataUri?: string; // server-fetched QR image inlined (browser need not reach the CDN)
+  qrcodeUrl?: string; // liteapp.weixin.qq.com link; the web-ui renders it into a scannable QR
   attempt?: number;
   accountId?: string;
   baseUrl?: string;
@@ -130,9 +129,8 @@ export class WeChatLoginSession {
       if (!line) continue;
       let evt: Record<string, unknown>;
       try { evt = JSON.parse(line); } catch { continue; } // ignore non-JSON noise
-      // Log event arrival without dumping the (large) inlined image.
       const note = evt.type === 'qr'
-        ? `url=${evt.url ? 'yes' : 'no'} dataUri=${evt.dataUri ? `${String(evt.dataUri).length}ch` : 'no'} attempt=${evt.attempt ?? '?'}`
+        ? `url=${evt.url ? 'yes' : 'no'} attempt=${evt.attempt ?? '?'}`
         : evt.type === 'status' ? `phase=${evt.phase}`
         : evt.type === 'error' ? `${evt.reason ?? ''} ${evt.detail ?? ''}` : '';
       console.log(`[wechat-login] event: ${evt.type} ${note}`);
@@ -145,23 +143,15 @@ export class WeChatLoginSession {
     // after login confirmed would otherwise flip the phase back to 'waiting').
     if (this.state.phase === 'confirmed' || this.state.phase === 'error') return;
     switch (evt.type) {
-      case 'qr': {
-        // A 'qr' event carries either a fresh url (→ adopt attempt, clear any stale inlined
-        // image) or the inlined dataUri for one attempt; they arrive as two separate events.
-        const next: LoginState = { ...this.state, phase: 'waiting', error: undefined };
-        if (typeof evt.url === 'string') {
-          next.qrcodeUrl = evt.url;
-          next.qrcodeDataUri = undefined;
-          if (typeof evt.attempt === 'number') next.attempt = evt.attempt;
-        }
-        if (typeof evt.dataUri === 'string') {
-          // Accept the inlined image only if it belongs to the QR currently shown — a slow
-          // fetch for a previous attempt must not overwrite the refreshed QR.
-          if (evt.attempt == null || evt.attempt === next.attempt) next.qrcodeDataUri = evt.dataUri;
-        }
-        this.state = next;
+      case 'qr':
+        this.state = {
+          ...this.state,
+          phase: 'waiting',
+          qrcodeUrl: typeof evt.url === 'string' ? evt.url : this.state.qrcodeUrl,
+          attempt: typeof evt.attempt === 'number' ? evt.attempt : this.state.attempt,
+          error: undefined,
+        };
         break;
-      }
       case 'status': {
         const phase = evt.phase;
         if (phase === 'scanned') this.state = { ...this.state, phase: 'scanned' };
@@ -177,7 +167,6 @@ export class WeChatLoginSession {
           accountId: typeof evt.accountId === 'string' ? evt.accountId : undefined,
           baseUrl: typeof evt.baseUrl === 'string' ? evt.baseUrl : undefined,
           qrcodeUrl: undefined,
-          qrcodeDataUri: undefined,
           error: undefined,
         };
         break;

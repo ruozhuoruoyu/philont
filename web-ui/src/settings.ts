@@ -21,6 +21,7 @@
  */
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
+import QRCode from 'qrcode';
 import { LAUNCHER_BASE } from './config.js';
 import { LangController, t, tr, type Msg } from './i18n.js';
 
@@ -30,8 +31,9 @@ type Values = Record<string, string>;
 /** 微信扫码登录会话态(对应 launcher 的 LoginState)。 */
 interface WxLogin {
   phase: 'idle' | 'starting' | 'waiting' | 'scanned' | 'confirmed' | 'expired' | 'error';
+  // iLink returns a liteapp.weixin.qq.com link (NOT an image); the web-ui renders it into a
+  // scannable QR locally. WeChat scans the QR → opens the link → login confirms.
   qrcodeUrl?: string;
-  qrcodeDataUri?: string; // 服务端抓取并内联的二维码图,优先用它,浏览器不必直连 weixin
   attempt?: number;
   accountId?: string;
   error?: string;
@@ -296,6 +298,8 @@ export class SettingsView extends LitElement {
   @state() private autostart = false;
   @state() private proxyEnabled = false; // 全局代理开关(UI 态:由 PHILONT_PROXY 是否非空派生)
   @state() private wx: WxLogin | null = null; // 微信扫码登录会话态(轮询 launcher 而来)
+  @state() private wxQrImg = '';              // 由 qrcodeUrl 本地生成的二维码图 data URL
+  private wxQrFor = '';                        // 已生成二维码对应的 url(去重,避免每轮重算)
   private wxTimer?: ReturnType<typeof setInterval>;
 
   connectedCallback(): void {
@@ -363,6 +367,8 @@ export class SettingsView extends LitElement {
   // ── 微信扫码登录:POST 启动 → 轮询 status → confirmed 后自动开通道 ──
   private async wxStart(): Promise<void> {
     this.wx = { phase: 'starting' };
+    this.wxQrImg = '';
+    this.wxQrFor = '';
     try {
       const r = await fetch(`${LAUNCHER_BASE}/api/launcher/wechat/login`, { method: 'POST' });
       this.wx = await r.json();
@@ -387,8 +393,15 @@ export class SettingsView extends LitElement {
       const r = await fetch(`${LAUNCHER_BASE}/api/launcher/wechat/login/status`, { cache: 'no-store' });
       const s = (await r.json()) as WxLogin;
       this.wx = s;
+      // Generate the scannable QR locally from the link (regenerate only when it changes).
+      if (s.phase === 'waiting' && s.qrcodeUrl && s.qrcodeUrl !== this.wxQrFor) {
+        this.wxQrFor = s.qrcodeUrl;
+        try { this.wxQrImg = await QRCode.toDataURL(s.qrcodeUrl, { width: 220, margin: 1 }); }
+        catch { this.wxQrImg = ''; }
+      }
       if (s.phase === 'confirmed') {
         this.wxStopPolling();
+        this.wxQrImg = '';
         this.setVal('WECHAT_ENABLED', '1'); // 登录成功即默认开通道,用户仍需保存并重启
         this.message = t('微信登录成功,点「保存并重启 agent」让通道生效。',
           'WeChat login succeeded — click “Save & Restart agent” to bring the channel up.');
@@ -402,6 +415,8 @@ export class SettingsView extends LitElement {
     this.wxStopPolling();
     try { await fetch(`${LAUNCHER_BASE}/api/launcher/wechat/login/cancel`, { method: 'POST' }); } catch { /* 忽略 */ }
     this.wx = null;
+    this.wxQrImg = '';
+    this.wxQrFor = '';
   }
 
   private isOn(f: Field): boolean {
@@ -543,11 +558,6 @@ export class SettingsView extends LitElement {
       </label>`;
   }
 
-  /** 归一化二维码值为 <img src> 可渲染的形式:http(s)/data 原样;否则当作 base64 PNG 包成 data URI。 */
-  private wxQrSrc(raw: string): string {
-    return /^(https?:|data:)/i.test(raw) ? raw : `data:image/png;base64,${raw}`;
-  }
-
   /** 微信扫码登录面板:浏览器内显示二维码 + 实时状态,替代命令行 npm run wechat:login。 */
   private renderWeChatLogin() {
     const wx = this.wx;
@@ -560,15 +570,13 @@ export class SettingsView extends LitElement {
           <span class="help">${t('在浏览器里扫码,免去命令行 npm run wechat:login。', 'Scan in the browser — no command-line npm run wechat:login.')}</span>
         ` : null}
         ${phase === 'starting' ? html`<p class="muted">${t('正在获取二维码…', 'Fetching QR code…')}</p>` : null}
-        ${phase === 'waiting' && (wx?.qrcodeDataUri || wx?.qrcodeUrl) ? html`
+        ${phase === 'waiting' && wx?.qrcodeUrl ? html`
           <div class="wx-qr">
-            <!-- Prefer the server-inlined data URI (browser may not reach the weixin CDN). The
-                 raw url is a fallback; referrerpolicy=no-referrer dodges the CDN's hotlink 403. -->
-            <img src=${wx.qrcodeDataUri ?? this.wxQrSrc(wx.qrcodeUrl as string)} alt=${t('微信二维码', 'WeChat QR')}
-              width="200" height="200" referrerpolicy="no-referrer" />
+            ${this.wxQrImg
+              ? html`<img src=${this.wxQrImg} alt=${t('微信二维码', 'WeChat QR')} width="220" height="220" />`
+              : html`<p class="muted">${t('正在生成二维码…', 'Generating QR…')}</p>`}
             <p class="muted">${t('用微信扫描上方二维码', 'Scan the QR above with WeChat')}${wx.attempt && wx.attempt > 1 ? ` (#${wx.attempt})` : ''}</p>
-            ${!wx.qrcodeDataUri && wx.qrcodeUrl && /^https?:/i.test(wx.qrcodeUrl) ? html`<a class="wx-link"
-              href=${wx.qrcodeUrl} target="_blank" rel="noreferrer">${t('图加载不出?点此在新标签打开二维码', 'QR not loading? Open it in a new tab')}</a>` : null}
+            <a class="wx-link" href=${wx.qrcodeUrl} target="_blank" rel="noreferrer">${t('扫不上?在手机浏览器打开此链接', "Can't scan? Open this link on your phone")}</a>
             <button type="button" class="mini" @click=${() => this.wxCancel()}>${t('取消', 'Cancel')}</button>
           </div>` : null}
         ${phase === 'scanned' ? html`
