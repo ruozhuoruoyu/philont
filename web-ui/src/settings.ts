@@ -534,6 +534,11 @@ export class SettingsView extends LitElement {
       </label>`;
   }
 
+  /** 归一化二维码值为 <img src> 可渲染的形式:http(s)/data 原样;否则当作 base64 PNG 包成 data URI。 */
+  private wxQrSrc(raw: string): string {
+    return /^(https?:|data:)/i.test(raw) ? raw : `data:image/png;base64,${raw}`;
+  }
+
   /** 微信扫码登录面板:浏览器内显示二维码 + 实时状态,替代命令行 npm run wechat:login。 */
   private renderWeChatLogin() {
     const wx = this.wx;
@@ -548,8 +553,13 @@ export class SettingsView extends LitElement {
         ${phase === 'starting' ? html`<p class="muted">${t('正在获取二维码…', 'Fetching QR code…')}</p>` : null}
         ${phase === 'waiting' && wx?.qrcodeUrl ? html`
           <div class="wx-qr">
-            <img src=${wx.qrcodeUrl} alt="WeChat QR" width="200" height="200" />
+            <!-- referrerpolicy=no-referrer: weixin CDN hotlink-protects QR images; without it the
+                 embedded <img> sends our page Referer and the CDN 403s (shows only alt text). -->
+            <img src=${this.wxQrSrc(wx.qrcodeUrl)} alt=${t('微信二维码', 'WeChat QR')}
+              width="200" height="200" referrerpolicy="no-referrer" />
             <p class="muted">${t('用微信扫描上方二维码', 'Scan the QR above with WeChat')}${wx.attempt && wx.attempt > 1 ? ` (#${wx.attempt})` : ''}</p>
+            ${/^https?:/i.test(wx.qrcodeUrl) ? html`<a class="wx-link" href=${wx.qrcodeUrl}
+              target="_blank" rel="noreferrer">${t('图加载不出?点此在新标签打开二维码', 'QR not loading? Open it in a new tab')}</a>` : null}
             <button type="button" class="mini" @click=${() => this.wxCancel()}>${t('取消', 'Cancel')}</button>
           </div>` : null}
         ${phase === 'scanned' ? html`
@@ -733,6 +743,7 @@ export class SettingsView extends LitElement {
     .wx-qr img { border: 1px solid #e5e7eb; border-radius: 6px; background: #fff; }
     .wx-ok { color: #15803d; font-size: 13px; margin: 4px 0; }
     .wx-err { color: #b91c1c; font-size: 13px; margin: 4px 0; }
+    .wx-link { font-size: 12px; color: #1976d2; }
     .toggle-row .help { grid-column: 3; }
     .banner { margin: 14px 0; padding: 10px 14px; border-radius: 8px; font-size: 14px; }
     .banner.err { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
